@@ -1,0 +1,37 @@
+# Environment
+.env
+*.env
+
+# Data and database files
+data/
+db/*.db
+db/*.sqlite
+db/*.sqlite3
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store

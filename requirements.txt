@@ -1,0 +1,8 @@
+yfinance>=0.2.36
+requests>=2.31.0
+pandas>=2.0.0
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+lxml>=5.0.0
+html5lib>=1.1
