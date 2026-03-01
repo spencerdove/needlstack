@@ -432,6 +432,7 @@ function renderChart() {
   } else {
     Plotly.newPlot(chartDiv, traces, layout, config);
   }
+  Plotly.Plots.resize(chartDiv);
 }
 
 // Map logical yaxis key (y1/y2/y3) to Plotly axis id, compressing unused axes
