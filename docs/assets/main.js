@@ -348,12 +348,15 @@ function renderChart() {
     return;
   }
 
+  if (!window.Plotly) {
+    setStatus('Plotly failed to load — check network connection');
+    return;
+  }
+
   placeholder.style.display = 'none';
 
   const traces = [];
   const metricsInfo = METRICS.filter(m => state.activeMetrics.includes(m.id));
-
-  // Determine which yaxes are needed
   const usedAxes = new Set(metricsInfo.map(m => m.yaxis));
 
   for (let ti = 0; ti < state.activeTickers.length; ti++) {
@@ -362,59 +365,66 @@ function renderChart() {
     if (!cached) continue;
 
     const color = TICKER_COLORS[ti % TICKER_COLORS.length];
+    const traceName = state.activeTickers.length > 1
+      ? `${ticker} ${metricsInfo[0]?.label}`
+      : metricsInfo[0]?.label;
 
     for (const metric of metricsInfo) {
-      let rows, dateField, valueField;
+      const yax = axisId(metric.yaxis, usedAxes);
+      const multiTicker = state.activeTickers.length > 1;
+      const name = multiTicker ? `${ticker} ${metric.label}` : metric.label;
 
       if (metric.source === 'prices') {
-        rows = cached.prices;
-        dateField = 'date';
-        valueField = metric.field;
-      } else if (metric.source === 'income') {
-        rows = cached.financials?.income_statements || [];
-        dateField = 'period_end';
-        valueField = metric.field;
-        // Annual only to avoid clutter
+        // ── Candlestick ──────────────────────────────────────────────────
+        const filtered = filterByDateRange(cached.prices, 'date', state.dateRange);
+        traces.push({
+          type: 'candlestick',
+          name,
+          x:     filtered.map(r => r.date),
+          open:  filtered.map(r => r.open),
+          high:  filtered.map(r => r.high),
+          low:   filtered.map(r => r.low),
+          close: filtered.map(r => r.close),
+          increasing: { line: { color: '#3fb950', width: 1 } },
+          decreasing: { line: { color: '#f85149', width: 1 } },
+          whiskerwidth: 0.4,
+          yaxis: yax,
+          hovertemplate:
+            '<b>' + name + '</b><br>' +
+            'O: %{open:.2f}  H: %{high:.2f}<br>' +
+            'L: %{low:.2f}  C: %{close:.2f}<extra></extra>',
+        });
+
+      } else {
+        // ── Line + markers (financials) ───────────────────────────────────
+        let rows = [];
+        if (metric.source === 'income')   rows = cached.financials?.income_statements || [];
+        if (metric.source === 'balance')  rows = cached.financials?.balance_sheets || [];
+        if (metric.source === 'cashflow') rows = cached.financials?.cash_flows || [];
+
+        // Annual periods only to avoid quarterly clutter
         rows = rows.filter(r => r.period_type === 'annual');
-      } else if (metric.source === 'balance') {
-        rows = cached.financials?.balance_sheets || [];
-        dateField = 'period_end';
-        valueField = metric.field;
-        rows = rows.filter(r => r.period_type === 'annual');
-      } else if (metric.source === 'cashflow') {
-        rows = cached.financials?.cash_flows || [];
-        dateField = 'period_end';
-        valueField = metric.field;
-        rows = rows.filter(r => r.period_type === 'annual');
+        const filtered = filterByDateRange(rows, 'period_end', state.dateRange);
+
+        const xs = filtered.map(r => r.period_end);
+        const ys = filtered.map(r => {
+          const v = r[metric.field];
+          return v != null ? +(v / 1e9).toFixed(3) : null;
+        });
+
+        traces.push({
+          type: 'scatter',
+          mode: 'lines+markers',
+          name,
+          x: xs,
+          y: ys,
+          line:   { color, width: 2 },
+          marker: { color, size: 6 },
+          yaxis: yax,
+          hovertemplate:
+            `<b>${name}</b><br>%{x}<br>%{y:.2f} ${metric.unit}<extra></extra>`,
+        });
       }
-
-      const filtered = filterByDateRange(rows, dateField, state.dateRange);
-      const xs = filtered.map(r => r[dateField]);
-      let ys = filtered.map(r => r[valueField]);
-
-      // Scale financials to billions
-      if (metric.unit === '$B') {
-        ys = ys.map(v => (v != null ? +(v / 1e9).toFixed(3) : null));
-      }
-
-      const isPrice = metric.source === 'prices';
-      const traceName = state.activeTickers.length > 1
-        ? `${ticker} ${metric.label}`
-        : metric.label;
-
-      traces.push({
-        x: xs,
-        y: ys,
-        name: traceName,
-        type: isPrice ? 'scatter' : 'bar',
-        mode: isPrice ? 'lines' : undefined,
-        line: isPrice ? { color, width: 1.5 } : undefined,
-        marker: !isPrice ? { color } : undefined,
-        opacity: 0.9,
-        yaxis: axisId(metric.yaxis, usedAxes),
-        hovertemplate:
-          `<b>${traceName}</b><br>%{x}<br>%{y:.2f} ${metric.unit}<extra></extra>`,
-      });
     }
   }
 
@@ -427,7 +437,7 @@ function renderChart() {
     toImageButtonOptions: { filename: 'needlstack_chart' },
   };
 
-  if (chartDiv.data) {
+  if (chartDiv._fullLayout) {
     Plotly.react(chartDiv, traces, layout, config);
   } else {
     Plotly.newPlot(chartDiv, traces, layout, config);
@@ -454,7 +464,7 @@ function buildLayout(metricsInfo, usedAxes) {
     zerolinecolor: '#30363d',
   };
 
-  // Build axis configs
+  // Build y-axis configs
   const axisConfigs = {};
   sorted.forEach((ykey, i) => {
     const metrics = metricsInfo.filter(m => m.yaxis === ykey);
@@ -467,9 +477,14 @@ function buildLayout(metricsInfo, usedAxes) {
       side,
       overlaying: i > 0 ? 'y' : undefined,
       showgrid: i === 0,
-      tickformat: unit === '$B' ? ',.1f' : ',.2f',
+      tickformat: unit === '$B' ? ',.2f' : ',.2f',
     };
   });
+
+  // Compute explicit x range so the view matches the date range selector exactly
+  const today = new Date().toISOString().slice(0, 10);
+  const rangeStart = cutoffDate(state.dateRange);
+  const xRange = rangeStart ? [rangeStart, today] : undefined;
 
   return {
     paper_bgcolor: '#161b22',
@@ -482,7 +497,7 @@ function buildLayout(metricsInfo, usedAxes) {
       font: { color: '#e6edf3', size: 11 },
     },
     margin: { l: 60, r: 60, t: 20, b: 60 },
-    hovermode: 'x unified',
+    hovermode: 'closest',
     hoverlabel: {
       bgcolor: '#21262d',
       bordercolor: '#30363d',
@@ -490,8 +505,9 @@ function buildLayout(metricsInfo, usedAxes) {
     },
     xaxis: {
       ...axisBase,
-      rangeslider: { bgcolor: '#161b22', bordercolor: '#30363d', thickness: 0.06 },
       type: 'date',
+      range: xRange,
+      rangeslider: { bgcolor: '#161b22', bordercolor: '#30363d', thickness: 0.06 },
     },
     ...axisConfigs,
   };
