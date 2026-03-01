@@ -11,6 +11,7 @@ const state = {
   activeTickers: [],     // ['AAPL', 'MSFT']
   activeMetrics: ['price'],
   dateRange: '1Y',
+  granularity: 'D',      // 'D' | 'W' | 'M'
   loading: new Set(),
 };
 
@@ -25,6 +26,11 @@ const METRICS = [
 ];
 
 const DATE_RANGES = ['1M', '3M', '6M', '1Y', '3Y', '5Y', 'MAX'];
+const GRANULARITIES = [
+  { id: 'D', label: 'Daily' },
+  { id: 'W', label: 'Weekly' },
+  { id: 'M', label: 'Monthly' },
+];
 
 const BASE_PATH = (() => {
   // Works whether served from root or from /needlstack/
@@ -95,6 +101,24 @@ function buildControls() {
   const spacer = document.createElement('div');
   spacer.style.flex = '1';
 
+  // Granularity (price only)
+  const granGroup = document.createElement('div');
+  granGroup.className = 'range-group';
+  granGroup.id = 'gran-group';
+  const granLabel = document.createElement('span');
+  granLabel.className = 'metrics-label';
+  granLabel.style.marginRight = '4px';
+  granLabel.textContent = 'Bars';
+  granGroup.appendChild(granLabel);
+  for (const g of GRANULARITIES) {
+    const btn = document.createElement('button');
+    btn.className = 'range-btn' + (state.granularity === g.id ? ' active' : '');
+    btn.textContent = g.label;
+    btn.dataset.gran = g.id;
+    btn.addEventListener('click', () => setGranularity(g.id, btn));
+    granGroup.appendChild(btn);
+  }
+
   // Date range
   const rangeGroup = document.createElement('div');
   rangeGroup.className = 'range-group';
@@ -107,7 +131,7 @@ function buildControls() {
     rangeGroup.appendChild(btn);
   }
 
-  row2.append(metricsGroup, spacer, rangeGroup);
+  row2.append(metricsGroup, spacer, granGroup, rangeGroup);
   controls.append(row1, row2);
 
   // Wire up search
@@ -262,6 +286,13 @@ function setDateRange(range, btn) {
   renderChart();
 }
 
+function setGranularity(gran, btn) {
+  state.granularity = gran;
+  document.querySelectorAll('#gran-group .range-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderChart();
+}
+
 // ── Data fetching ──────────────────────────────────────────────────────────
 
 async function fetchTickers() {
@@ -329,6 +360,42 @@ function filterByDateRange(rows, dateField, range) {
   return rows.filter(r => r[dateField] >= cutoff);
 }
 
+// ── OHLCV aggregation ──────────────────────────────────────────────────────
+
+function aggregateOHLCV(rows, granularity) {
+  if (granularity === 'D') return rows;
+
+  const groups = new Map();
+  for (const r of rows) {
+    const d = new Date(r.date);
+    let key;
+    if (granularity === 'W') {
+      // Monday of the ISO week
+      const day = (d.getDay() + 6) % 7; // Mon=0 … Sun=6
+      const mon = new Date(d);
+      mon.setDate(d.getDate() - day);
+      key = mon.toISOString().slice(0, 10);
+    } else {
+      // First of month
+      key = r.date.slice(0, 7) + '-01';
+    }
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, bars]) => ({
+      date,
+      open:      bars[0].open,
+      high:      Math.max(...bars.map(b => b.high)),
+      low:       Math.min(...bars.map(b => b.low)),
+      close:     bars[bars.length - 1].close,
+      adj_close: bars[bars.length - 1].adj_close,
+      volume:    bars.reduce((s, b) => s + (b.volume || 0), 0),
+    }));
+}
+
 // ── Chart rendering ────────────────────────────────────────────────────────
 
 const TICKER_COLORS = [
@@ -376,7 +443,8 @@ function renderChart() {
 
       if (metric.source === 'prices') {
         // ── Candlestick ──────────────────────────────────────────────────
-        const filtered = filterByDateRange(cached.prices, 'date', state.dateRange);
+        const rangeFiltered = filterByDateRange(cached.prices, 'date', state.dateRange);
+        const filtered = aggregateOHLCV(rangeFiltered, state.granularity);
         traces.push({
           type: 'candlestick',
           name,
@@ -403,7 +471,7 @@ function renderChart() {
         if (metric.source === 'cashflow') rows = cached.financials?.cash_flows || [];
 
         // Annual periods only to avoid quarterly clutter
-        rows = rows.filter(r => r.period_type === 'annual');
+        rows = rows.filter(r => r.period_type === 'A');
         const filtered = filterByDateRange(rows, 'period_end', state.dateRange);
 
         const xs = filtered.map(r => r.period_end);
