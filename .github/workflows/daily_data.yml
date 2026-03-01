@@ -1,0 +1,53 @@
+# Needlstack — Daily data export workflow (stub)
+#
+# V1 strategy: data is exported locally via cron (see README) and the
+# resulting docs/data/ JSON files are committed + pushed. GitHub Pages
+# then deploys automatically on push.
+#
+# This workflow only deploys GitHub Pages; it does NOT run the export
+# because the SQLite DB lives on the local machine and is not accessible
+# to GitHub Actions runners.
+#
+# V2 path: replace local cron with a job that fetches directly from
+# yfinance + SEC EDGAR APIs here, writes the JSON, then commits.
+
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

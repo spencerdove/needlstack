@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Needlstack — S&P 500 Visualizer</title>
+  <meta name="description" content="Interactive multi-stock, multi-metric visualization of S&P 500 data." />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+  <header>
+    <a class="wordmark" href="/">Needlstack<span>.com</span></a>
+  </header>
+
+  <main>
+    <div id="controls"></div>
+
+    <div id="chart-container">
+      <!-- Plotly renders here -->
+      <div id="plotly-chart"></div>
+
+      <!-- Empty / loading state overlay -->
+      <div id="chart-placeholder">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.5"
+             stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        <p>Search for a ticker to get started</p>
+        <div class="spinner" style="display:none"></div>
+      </div>
+    </div>
+
+    <div id="status-bar"></div>
+  </main>
+
+  <!-- Plotly.js via CDN -->
+  <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" charset="utf-8"></script>
+  <script src="assets/main.js"></script>
+
+</body>
+</html>

@@ -3,7 +3,7 @@
 *.env
 
 # Data and database files
-data/
+/data/
 db/*.db
 db/*.sqlite
 db/*.sqlite3
@@ -35,3 +35,7 @@ env/
 
 # macOS
 .DS_Store
+
+# Docs data — per-ticker JSON (generated locally, not committed raw)
+docs/data/prices/
+docs/data/financials/
