@@ -34,8 +34,6 @@ logger = logging.getLogger(__name__)
 
 from db.schema import init_db
 from ingestion.refresh import run_incremental_refresh
-from ingestion.tickers import get_sp500_dataframe
-from ingestion.prices import _upsert_tickers
 
 
 def main() -> None:
@@ -43,11 +41,21 @@ def main() -> None:
 
     engine = init_db()
 
-    # Keep ticker metadata current
-    tickers_df = get_sp500_dataframe()
-    _upsert_tickers(engine, tickers_df)
+    # Resolve active equity tickers (expanded universe if available, else S&P 500)
+    try:
+        from ingestion.universe import get_active_tickers
+        tickers = get_active_tickers(asset_types=["equity"], engine=engine)
+        logger.info(f"Using expanded universe: {len(tickers)} equity tickers")
+    except Exception:
+        from ingestion.tickers import get_sp500_tickers
+        from ingestion.tickers import get_sp500_dataframe
+        from ingestion.prices import _upsert_tickers
+        tickers_df = get_sp500_dataframe()
+        _upsert_tickers(engine, tickers_df)
+        tickers = get_sp500_tickers()
+        logger.info(f"Falling back to S&P 500: {len(tickers)} tickers")
 
-    summary = run_incremental_refresh(engine=engine)
+    summary = run_incremental_refresh(engine=engine, tickers=tickers)
 
     logger.info(
         f"=== Daily refresh complete | "

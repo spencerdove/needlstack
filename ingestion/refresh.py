@@ -10,7 +10,6 @@ import sqlalchemy as sa
 
 from db.schema import get_engine, stock_prices_table
 from ingestion.prices import download_prices
-from ingestion.tickers import get_sp500_tickers
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +37,14 @@ def get_last_dates(engine: sa.Engine, tickers: list[str]) -> dict[str, Optional[
 def run_incremental_refresh(
     start_fallback: str = "2020-01-01",
     engine: Optional[sa.Engine] = None,
+    tickers: Optional[list[str]] = None,
 ) -> dict:
     """
-    For each S&P 500 ticker, download data from (last_date + 1 day) to today.
+    For each ticker, download data from (last_date + 1 day) to today.
     Tickers with no history fall back to *start_fallback*.
+
+    If *tickers* is None, falls back to get_active_tickers(['equity'])
+    or, if that returns nothing, get_sp500_tickers().
 
     Returns a summary dict with keys: tickers_updated, rows_added, failures.
     """
@@ -49,7 +52,15 @@ def run_incremental_refresh(
         engine = get_engine()
 
     today = date.today()
-    tickers = get_sp500_tickers()
+    if tickers is None:
+        try:
+            from ingestion.universe import get_active_tickers
+            tickers = get_active_tickers(asset_types=["equity"], engine=engine)
+        except Exception:
+            pass
+        if not tickers:
+            from ingestion.tickers import get_sp500_tickers
+            tickers = get_sp500_tickers()
     last_dates = get_last_dates(engine, tickers)
 
     to_refresh: dict[str, str] = {}

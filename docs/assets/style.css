@@ -369,3 +369,95 @@ main {
     gap: 6px;
   }
 }
+
+/* ── Tabs ──────────────────────────────────────────────────────── */
+#tab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
+}
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 12px;
+  margin-bottom: -1px;
+}
+.tab-btn:hover { color: #e6edf3; }
+.tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+
+#tab-content {
+  min-height: 200px;
+  padding: 16px;
+  background: #0d1117;
+}
+.tab-empty { color: #8b949e; font-size: 13px; text-align: center; padding: 32px 0; }
+.tab-section { width: 100%; }
+
+/* ── Data table ────────────────────────────────────────────────── */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th { color: #8b949e; font-weight: 500; padding: 8px 12px; text-align: left; border-bottom: 1px solid #30363d; }
+.data-table td { padding: 7px 12px; border-bottom: 1px solid #21262d; color: #e6edf3; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table a { color: #58a6ff; text-decoration: none; }
+.data-table a:hover { text-decoration: underline; }
+
+/* ── Ownership ─────────────────────────────────────────────────── */
+.ownership-summary { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; min-width: 120px; }
+.stat-label { display: block; font-size: 11px; color: #8b949e; margin-bottom: 4px; }
+.stat-value { display: block; font-size: 18px; font-weight: 600; color: #e6edf3; }
+.positive { color: #3fb950 !important; }
+.negative { color: #f85149 !important; }
+
+/* ── News ──────────────────────────────────────────────────────── */
+.news-list { display: flex; flex-direction: column; gap: 12px; }
+.news-item { padding: 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+.news-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.news-source { font-size: 11px; color: #8b949e; text-transform: capitalize; }
+.news-date { font-size: 11px; color: #8b949e; }
+.news-title { color: #58a6ff; text-decoration: none; font-size: 14px; line-height: 1.4; }
+.news-title:hover { text-decoration: underline; }
+.sentiment-badge { font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: 500; }
+.sentiment-badge.bullish { background: rgba(63,185,80,.15); color: #3fb950; }
+.sentiment-badge.bearish { background: rgba(248,81,73,.15); color: #f85149; }
+.sentiment-badge.neutral { background: rgba(139,148,158,.15); color: #8b949e; }
+.title-badge { font-size: 10px; padding: 2px 6px; border-radius: 10px; background: rgba(88,166,255,.15); color: #58a6ff; }
+
+/* ── Index badges on chips ─────────────────────────────────────── */
+.chip-badges { display: flex; gap: 3px; align-items: center; }
+.index-badge { font-size: 9px; padding: 1px 5px; border-radius: 8px; background: rgba(88,166,255,.15); color: #58a6ff; white-space: nowrap; }
+
+/* ── 8-K item badges ───────────────────────────────────────────── */
+.item-badge { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: rgba(210,168,255,.15); color: #d2a8ff; margin-right: 2px; }
+
+/* ── Narratives ────────────────────────────────────────────────── */
+.narratives-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.narrative-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; }
+.narrative-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.narrative-name { font-weight: 600; font-size: 14px; color: #e6edf3; }
+.narrative-momentum { font-size: 13px; font-weight: 600; }
+.narrative-desc { font-size: 12px; color: #8b949e; margin: 0 0 8px; line-height: 1.4; }
+.narrative-tickers { display: flex; flex-wrap: wrap; gap: 4px; }
+.narrative-ticker { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #21262d; color: #58a6ff; cursor: pointer; }
+.narrative-ticker:hover { background: #30363d; }
+
+/* ── Chat ──────────────────────────────────────────────────────── */
+.chat-container { display: flex; flex-direction: column; height: 400px; }
+#chat-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.chat-message { max-width: 80%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.chat-message.user { background: #1f6feb; color: #fff; align-self: flex-end; }
+.chat-message.assistant { background: #161b22; border: 1px solid #30363d; color: #e6edf3; align-self: flex-start; }
+.chat-message.loading { opacity: 0.6; }
+.chat-message.error { border-color: #f85149; color: #f85149; }
+.chat-input-row { display: flex; gap: 8px; margin-top: 8px; }
+#chat-input { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+#chat-input:focus { outline: none; border-color: #58a6ff; }
+#chat-send { background: #238636; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+#chat-send:hover { background: #2ea043; }
+.chat-hint { font-size: 11px; color: #8b949e; margin-top: 6px; }
