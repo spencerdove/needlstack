@@ -9,6 +9,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -35,8 +36,8 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
-    tickers: list[str] | None = None
-    conversation_id: str | None = None
+    tickers: Optional[List[str]] = None
+    conversation_id: Optional[str] = None
 
 
 @app.post("/chat")

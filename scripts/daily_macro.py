@@ -38,7 +38,34 @@ logger = logging.getLogger(__name__)
 
 from db.schema import init_db
 from ingestion.prices import download_prices
-from ingestion.universe import MACRO_SYMBOLS
+from ingestion.universe import MACRO_SYMBOLS, _macro_asset_type
+
+
+def _ensure_macro_tickers(engine: sa.Engine) -> None:
+    """Insert macro symbols into tickers table if not already present."""
+    rows = [
+        {
+            "ticker": sym,
+            "company_name": sym,
+            "sector": None,
+            "industry": None,
+            "added_date": None,
+            "cik": None,
+            "asset_type": _macro_asset_type(sym),
+            "exchange": None,
+            "is_active": 1,
+        }
+        for sym in MACRO_SYMBOLS
+    ]
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT OR IGNORE INTO tickers "
+                "(ticker, company_name, sector, industry, added_date, cik, asset_type, exchange, is_active) "
+                "VALUES (:ticker, :company_name, :sector, :industry, :added_date, :cik, :asset_type, :exchange, :is_active)"
+            ),
+            rows,
+        )
 
 
 def _get_last_known_date(engine: sa.Engine, tickers: list[str]) -> str:
@@ -66,6 +93,7 @@ def main() -> None:
     logger.info("=== Daily macro refresh started ===")
 
     engine = init_db()
+    _ensure_macro_tickers(engine)
 
     start = _get_last_known_date(engine, MACRO_SYMBOLS)
     end = date.today().isoformat()

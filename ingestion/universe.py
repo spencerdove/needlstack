@@ -229,7 +229,7 @@ def refresh_universe(engine: Optional[sa.Engine] = None) -> tuple[int, list[str]
     return upserted, failed
 
 
-def get_active_tickers(asset_types: list[str] | None = None, engine: Optional[sa.Engine] = None) -> list[str]:
+def get_active_tickers(asset_types: Optional[list] = None, engine: Optional[sa.Engine] = None) -> list:
     """
     Return active tickers from the DB tickers table (is_active=1).
 
