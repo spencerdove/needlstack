@@ -2,7 +2,9 @@
 Download historical earnings surprises from yfinance and upsert into
 the earnings_surprises table.
 """
+import concurrent.futures
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -13,6 +15,8 @@ import yfinance as yf
 from db.schema import get_engine
 
 logger = logging.getLogger(__name__)
+
+_SEMAPHORE = threading.BoundedSemaphore(8)
 
 
 def _upsert_earnings(engine: sa.Engine, rows: list[dict]) -> int:
@@ -33,38 +37,21 @@ def _upsert_earnings(engine: sa.Engine, rows: list[dict]) -> int:
     return len(rows)
 
 
-def download_earnings_surprises(
-    tickers: list[str],
-    engine: Optional[sa.Engine] = None,
-    delay: float = 0.25,
-) -> tuple[int, list[str]]:
-    """
-    Fetch earnings_dates from yfinance for each ticker and upsert into
-    earnings_surprises table.
-
-    Returns (total_rows_inserted, failed_tickers).
-    """
-    if engine is None:
-        engine = get_engine()
-
-    total_rows = 0
-    failed: list[str] = []
-
-    for ticker in tickers:
+def _fetch_one_earnings(ticker: str, engine: sa.Engine, delay: float) -> tuple[str, bool]:
+    with _SEMAPHORE:
+        time.sleep(delay)
         try:
             yf_ticker = yf.Ticker(ticker)
             df = yf_ticker.earnings_dates
 
             if df is None or df.empty:
                 logger.debug(f"{ticker}: no earnings_dates data")
-                time.sleep(delay)
-                continue
+                return ticker, True
 
             # Filter rows where at least one of estimate or actual is non-null
             df = df[~(df["EPS Estimate"].isna() & df["Reported EPS"].isna())]
             if df.empty:
-                time.sleep(delay)
-                continue
+                return ticker, True
 
             rows = []
             for idx_date, row in df.iterrows():
@@ -82,14 +69,36 @@ def download_earnings_surprises(
                     "eps_surprise_pct": _safe(row.get("Surprise(%)")),
                 })
 
-            inserted = _upsert_earnings(engine, rows)
-            total_rows += inserted
-            logger.debug(f"{ticker}: {inserted} earnings rows inserted")
+            _upsert_earnings(engine, rows)
+            logger.debug(f"{ticker}: {len(rows)} earnings rows inserted")
+            return ticker, True
 
         except Exception as exc:
             logger.error(f"Failed to process earnings for {ticker}: {exc}")
-            failed.append(ticker)
-        finally:
-            time.sleep(delay)
+            return ticker, False
 
+
+def download_earnings_surprises(
+    tickers: list[str],
+    engine: Optional[sa.Engine] = None,
+    delay: float = 0.1,
+) -> tuple[int, list[str]]:
+    """
+    Fetch earnings_dates from yfinance for each ticker and upsert into
+    earnings_surprises table.
+
+    Returns (total_rows_inserted, failed_tickers).
+    """
+    if engine is None:
+        engine = get_engine()
+
+    failed: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_fetch_one_earnings, t, engine, delay): t for t in tickers}
+        for fut in concurrent.futures.as_completed(futures):
+            _, ok = fut.result()
+            if not ok:
+                failed.append(futures[fut])
+
+    total_rows = len(tickers) - len(failed)
     return total_rows, failed

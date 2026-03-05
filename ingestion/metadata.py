@@ -3,7 +3,9 @@ Fetch security metadata from yfinance Ticker.info and upsert into
 the security_metadata table. Also computes avg_volume_30d and
 avg_dollar_vol_30d via SQL over stock_prices.
 """
+import concurrent.futures
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Optional
@@ -15,6 +17,8 @@ import yfinance as yf
 from db.schema import get_engine
 
 logger = logging.getLogger(__name__)
+
+_SEMAPHORE = threading.BoundedSemaphore(8)
 
 
 def _safe(val) -> Optional[float]:
@@ -73,33 +77,16 @@ def _compute_volume_averages(engine: sa.Engine, ticker: str) -> tuple[Optional[f
     return avg_vol, avg_dollar_vol
 
 
-def download_security_metadata(
-    tickers: list[str],
-    engine: Optional[sa.Engine] = None,
-    delay: float = 0.3,
-) -> tuple[int, list[str]]:
-    """
-    Fetch security metadata from yfinance Ticker.info for each ticker and
-    upsert into the security_metadata table. Computes avg_volume_30d and
-    avg_dollar_vol_30d from stock_prices.
-
-    Returns (total_rows_upserted, failed_tickers).
-    """
-    if engine is None:
-        engine = get_engine()
-
-    total_rows = 0
-    failed: list[str] = []
-
-    for ticker in tickers:
+def _fetch_one_metadata(ticker: str, engine: sa.Engine, delay: float) -> tuple[str, bool]:
+    with _SEMAPHORE:
+        time.sleep(delay)
         try:
             yf_ticker = yf.Ticker(ticker)
             info = yf_ticker.info
 
             if not info:
                 logger.debug(f"{ticker}: no info data returned")
-                time.sleep(delay)
-                continue
+                return ticker, True
 
             avg_vol, avg_dollar_vol = _compute_volume_averages(engine, ticker)
 
@@ -114,14 +101,37 @@ def download_security_metadata(
                 "updated_at": datetime.utcnow().isoformat(),
             }
 
-            inserted = _upsert_metadata(engine, [row])
-            total_rows += inserted
+            _upsert_metadata(engine, [row])
             logger.debug(f"{ticker}: security_metadata upserted")
+            return ticker, True
 
         except Exception as exc:
             logger.error(f"Failed to process security metadata for {ticker}: {exc}")
-            failed.append(ticker)
-        finally:
-            time.sleep(delay)
+            return ticker, False
 
+
+def download_security_metadata(
+    tickers: list[str],
+    engine: Optional[sa.Engine] = None,
+    delay: float = 0.1,
+) -> tuple[int, list[str]]:
+    """
+    Fetch security metadata from yfinance Ticker.info for each ticker and
+    upsert into the security_metadata table. Computes avg_volume_30d and
+    avg_dollar_vol_30d from stock_prices.
+
+    Returns (total_rows_upserted, failed_tickers).
+    """
+    if engine is None:
+        engine = get_engine()
+
+    failed: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_fetch_one_metadata, t, engine, delay): t for t in tickers}
+        for fut in concurrent.futures.as_completed(futures):
+            _, ok = fut.result()
+            if not ok:
+                failed.append(futures[fut])
+
+    total_rows = len(tickers) - len(failed)
     return total_rows, failed

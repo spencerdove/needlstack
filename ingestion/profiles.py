@@ -10,7 +10,9 @@ Keys pulled:
     city
     state
 """
+import concurrent.futures
 import logging
+import threading
 import time
 from datetime import datetime
 from typing import Optional
@@ -22,6 +24,8 @@ import yfinance as yf
 from db.schema import get_engine
 
 logger = logging.getLogger(__name__)
+
+_SEMAPHORE = threading.BoundedSemaphore(8)
 
 
 def _safe_str(val) -> Optional[str]:
@@ -70,32 +74,16 @@ def _upsert_profiles(engine: sa.Engine, rows: list[dict]) -> int:
     return len(rows)
 
 
-def download_company_profiles(
-    tickers: list[str],
-    engine: Optional[sa.Engine] = None,
-    delay: float = 0.3,
-) -> tuple[int, list[str]]:
-    """
-    Fetch company profile information from yfinance Ticker.info for each
-    ticker and upsert into the company_profiles table.
-
-    Returns (total_rows_upserted, failed_tickers).
-    """
-    if engine is None:
-        engine = get_engine()
-
-    total_rows = 0
-    failed: list[str] = []
-
-    for ticker in tickers:
+def _fetch_one_profile(ticker: str, engine: sa.Engine, delay: float) -> tuple[str, bool]:
+    with _SEMAPHORE:
+        time.sleep(delay)
         try:
             yf_ticker = yf.Ticker(ticker)
             info = yf_ticker.info
 
             if not info:
                 logger.debug(f"{ticker}: no info data returned")
-                time.sleep(delay)
-                continue
+                return ticker, True
 
             row = {
                 "ticker": ticker,
@@ -108,14 +96,36 @@ def download_company_profiles(
                 "updated_at": datetime.utcnow().isoformat(),
             }
 
-            inserted = _upsert_profiles(engine, [row])
-            total_rows += inserted
+            _upsert_profiles(engine, [row])
             logger.debug(f"{ticker}: company_profiles upserted")
+            return ticker, True
 
         except Exception as exc:
             logger.error(f"Failed to process company profile for {ticker}: {exc}")
-            failed.append(ticker)
-        finally:
-            time.sleep(delay)
+            return ticker, False
 
+
+def download_company_profiles(
+    tickers: list[str],
+    engine: Optional[sa.Engine] = None,
+    delay: float = 0.1,
+) -> tuple[int, list[str]]:
+    """
+    Fetch company profile information from yfinance Ticker.info for each
+    ticker and upsert into the company_profiles table.
+
+    Returns (total_rows_upserted, failed_tickers).
+    """
+    if engine is None:
+        engine = get_engine()
+
+    failed: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_fetch_one_profile, t, engine, delay): t for t in tickers}
+        for fut in concurrent.futures.as_completed(futures):
+            _, ok = fut.result()
+            if not ok:
+                failed.append(futures[fut])
+
+    total_rows = len(tickers) - len(failed)
     return total_rows, failed

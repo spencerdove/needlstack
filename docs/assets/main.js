@@ -44,6 +44,10 @@ const BASE_PATH = (() => {
   return path || '';
 })();
 
+const DATA_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `${BASE_PATH}/data`
+  : 'https://data.needlstack.com';
+
 // ── Bootstrap ──────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -318,7 +322,7 @@ function setGranularity(gran, btn) {
 
 async function fetchTickers() {
   try {
-    const res = await fetch(`${BASE_PATH}/data/tickers.json`);
+    const res = await fetch(`${DATA_BASE_URL}/tickers.json`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     state.tickers = await res.json();
     setStatus(`${state.tickers.length} tickers loaded`);
@@ -331,8 +335,8 @@ async function fetchTickers() {
 async function fetchGlobalData() {
   try {
     const [indexRes, narrativesRes] = await Promise.all([
-      fetch(`${BASE_PATH}/data/indexes.json`),
-      fetch(`${BASE_PATH}/data/narratives.json`),
+      fetch(`${DATA_BASE_URL}/indexes.json`),
+      fetch(`${DATA_BASE_URL}/narratives.json`),
     ]);
     state.indexData = indexRes.ok ? await indexRes.json() : {};
     state.narratives = narrativesRes.ok ? await narrativesRes.json() : [];
@@ -350,15 +354,15 @@ async function loadTickerData(ticker) {
 
   try {
     const [pricesRes, financialsRes, metadataRes, corpActionsRes, profileRes, ownershipRes, sentimentRes, newsRes, socialRes] = await Promise.all([
-      fetch(`${BASE_PATH}/data/prices/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/financials/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/metadata/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/corporate_actions/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/profiles/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/ownership/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/sentiment/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/news/${ticker}.json`),
-      fetch(`${BASE_PATH}/data/social/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/prices/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/financials/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/metadata/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/corporate_actions/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/profiles/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/ownership/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/sentiment/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/news/${ticker}.json`),
+      fetch(`${DATA_BASE_URL}/social/${ticker}.json`),
     ]);
 
     const prices = pricesRes.ok ? await pricesRes.json() : [];

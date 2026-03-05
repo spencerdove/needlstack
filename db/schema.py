@@ -6,18 +6,33 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 import sqlalchemy as sa
+from sqlalchemy import event
 
 load_dotenv()
 
 DB_PATH = Path(os.getenv("DB_PATH", "db/needlstack.db"))
 
 
+def _set_sqlite_pragmas(dbapi_conn, _):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode = WAL")
+    cursor.execute("PRAGMA synchronous = NORMAL")
+    cursor.execute("PRAGMA cache_size = 20000")
+    cursor.execute("PRAGMA temp_store = MEMORY")
+    cursor.close()
+
+
 def get_engine(db_path: Path = DB_PATH) -> sa.Engine:
     database_url = os.getenv("DATABASE_URL")
     if database_url:
-        return sa.create_engine(database_url, echo=False)
+        engine = sa.create_engine(database_url, echo=False)
+        if database_url.startswith("sqlite:///"):
+            event.listen(engine, "connect", _set_sqlite_pragmas)
+        return engine
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    return sa.create_engine(f"sqlite:///{db_path}", echo=False)
+    engine = sa.create_engine(f"sqlite:///{db_path}", echo=False)
+    event.listen(engine, "connect", _set_sqlite_pragmas)
+    return engine
 
 
 metadata = sa.MetaData()
@@ -455,6 +470,19 @@ def run_migrations(engine: sa.Engine) -> None:
         if _sqlite_table_exists(conn, "stock_prices") and not _sqlite_column_exists(conn, "stock_prices", "dollar_volume"):
             conn.execute(sa.text("ALTER TABLE stock_prices ADD COLUMN dollar_volume REAL"))
             conn.commit()
+
+        # Performance indexes
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_sp_ticker ON stock_prices(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_is_ticker ON income_statements(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_bs_ticker ON balance_sheets(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_cf_ticker ON cash_flows(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_es_ticker ON earnings_surprises(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_na_pub_at ON news_articles(published_at)",
+            "CREATE INDEX IF NOT EXISTS idx_at_ticker ON article_tickers(ticker)",
+        ]:
+            conn.execute(sa.text(idx_sql))
+        conn.commit()
 
 
 def init_db(db_path: Path = DB_PATH) -> sa.Engine:

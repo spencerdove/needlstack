@@ -2,14 +2,18 @@
 Export SQLite data to per-ticker JSON files for the Needlstack website.
 
 Usage:
-    python scripts/export_data.py                       # export all tickers
+    python scripts/export_data.py                       # export all tickers → R2
     python scripts/export_data.py --tickers AAPL MSFT   # export specific tickers
     python scripts/export_data.py --skip-global         # skip global exports
+    LOCAL_EXPORT=1 python scripts/export_data.py        # write to docs/data/ locally
 """
 
 import argparse
+import concurrent.futures
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import sqlalchemy as sa
@@ -20,53 +24,62 @@ from db.schema import get_engine
 
 DOCS_DIR = Path(__file__).parent.parent / "docs"
 DATA_DIR = DOCS_DIR / "data"
-PRICES_DIR = DATA_DIR / "prices"
-FINANCIALS_DIR = DATA_DIR / "financials"
-METADATA_DIR = DATA_DIR / "metadata"
-CORPORATE_ACTIONS_DIR = DATA_DIR / "corporate_actions"
-PROFILES_DIR = DATA_DIR / "profiles"
-OWNERSHIP_DIR = DATA_DIR / "ownership"
-SENTIMENT_DIR = DATA_DIR / "sentiment"
-NEWS_DIR = DATA_DIR / "news"
-SOCIAL_DIR = DATA_DIR / "social"
+EXPORT_LOG_PATH = Path(__file__).parent.parent / "data" / "export_log.json"
+
+LOCAL_EXPORT = os.environ.get("LOCAL_EXPORT", "0") == "1"
 
 
-def setup_dirs() -> None:
-    PRICES_DIR.mkdir(parents=True, exist_ok=True)
-    FINANCIALS_DIR.mkdir(parents=True, exist_ok=True)
-    METADATA_DIR.mkdir(parents=True, exist_ok=True)
-    CORPORATE_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-    OWNERSHIP_DIR.mkdir(parents=True, exist_ok=True)
-    SENTIMENT_DIR.mkdir(parents=True, exist_ok=True)
-    NEWS_DIR.mkdir(parents=True, exist_ok=True)
-    SOCIAL_DIR.mkdir(parents=True, exist_ok=True)
+# ── Storage helpers ────────────────────────────────────────────────────────────
+
+def _write_or_upload(key: str, data: str) -> None:
+    if LOCAL_EXPORT:
+        out_path = DATA_DIR / key
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(data)
+    else:
+        from storage.r2 import upload_json
+        upload_json(key, data)
 
 
-def export_tickers(conn: sa.Connection) -> list[str]:
-    rows = conn.execute(
-        sa.text(
-            "SELECT ticker, company_name, sector, industry, asset_type, exchange "
-            "FROM tickers ORDER BY ticker"
-        )
-    ).fetchall()
-    tickers_data = [
-        {
-            "ticker": r[0],
-            "company_name": r[1],
-            "sector": r[2],
-            "industry": r[3],
-            "asset_type": r[4],
-            "exchange": r[5],
-        }
-        for r in rows
-    ]
-    (DATA_DIR / "tickers.json").write_text(json.dumps(tickers_data, separators=(",", ":")))
-    print(f"Exported {len(tickers_data)} tickers to tickers.json")
-    return [r[0] for r in rows]
+def _load_export_log() -> dict:
+    if EXPORT_LOG_PATH.exists():
+        try:
+            return json.loads(EXPORT_LOG_PATH.read_text())
+        except Exception:
+            return {}
+    return {}
 
 
-def export_prices(conn: sa.Connection, ticker: str) -> None:
+def _save_export_log(log: dict) -> None:
+    EXPORT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    EXPORT_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")))
+
+
+def _get_latest_price_date(conn: sa.Connection, ticker: str) -> str | None:
+    row = conn.execute(
+        sa.text("SELECT MAX(date) FROM stock_prices WHERE ticker = :ticker"),
+        {"ticker": ticker},
+    ).fetchone()
+    return str(row[0]) if row and row[0] is not None else None
+
+
+def _filter_unchanged(conn: sa.Connection, tickers: list[str], log: dict) -> list[str]:
+    """Skip tickers whose latest price date hasn't changed since last export."""
+    out = []
+    for ticker in tickers:
+        last_exported = log.get(ticker)
+        if last_exported is None:
+            out.append(ticker)
+            continue
+        latest_date = _get_latest_price_date(conn, ticker)
+        if latest_date is None or latest_date > last_exported[:10]:
+            out.append(ticker)
+    return out
+
+
+# ── Per-ticker export functions (return JSON string) ──────────────────────────
+
+def export_prices(conn: sa.Connection, ticker: str) -> str:
     rows = conn.execute(
         sa.text(
             "SELECT date, open, high, low, close, adj_close, volume "
@@ -86,10 +99,10 @@ def export_prices(conn: sa.Connection, ticker: str) -> None:
         }
         for r in rows
     ]
-    (PRICES_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_financials_v2(conn: sa.Connection, ticker: str) -> None:
+def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
     # Income statements
     try:
         inc_rows = conn.execute(
@@ -197,7 +210,6 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> None:
             ),
             {"ticker": ticker},
         ).fetchall()
-        # Reverse so chronological order (oldest first)
         valuation_snapshots = [
             {
                 "snapshot_date": str(r[0]),
@@ -218,10 +230,10 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> None:
         "earnings_surprises": earnings_surprises,
         "valuation_snapshots": valuation_snapshots,
     }
-    (FINANCIALS_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_metadata(conn: sa.Connection, ticker: str) -> None:
+def export_metadata(conn: sa.Connection, ticker: str) -> str:
     try:
         row = conn.execute(
             sa.text(
@@ -245,10 +257,10 @@ def export_metadata(conn: sa.Connection, ticker: str) -> None:
             data = {}
     except Exception:
         data = {}
-    (METADATA_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_corporate_actions(conn: sa.Connection, ticker: str) -> None:
+def export_corporate_actions(conn: sa.Connection, ticker: str) -> str:
     try:
         rows = conn.execute(
             sa.text(
@@ -268,29 +280,10 @@ def export_corporate_actions(conn: sa.Connection, ticker: str) -> None:
         ]
     except Exception:
         data = []
-    (CORPORATE_ACTIONS_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_indexes(conn: sa.Connection) -> None:
-    try:
-        rows = conn.execute(
-            sa.text(
-                "SELECT index_id, ticker FROM index_constituents "
-                "WHERE removed_date IS NULL ORDER BY index_id, ticker"
-            )
-        ).fetchall()
-        indexes: dict[str, list[str]] = {}
-        for r in rows:
-            index_id = r[0]
-            ticker = r[1]
-            indexes.setdefault(index_id, []).append(ticker)
-    except Exception:
-        indexes = {}
-    (DATA_DIR / "indexes.json").write_text(json.dumps(indexes, separators=(",", ":")))
-    print(f"Exported {len(indexes)} indexes to indexes.json")
-
-
-def export_profiles(conn: sa.Connection, ticker: str) -> None:
+def export_profiles(conn: sa.Connection, ticker: str) -> str:
     try:
         row = conn.execute(
             sa.text(
@@ -312,46 +305,10 @@ def export_profiles(conn: sa.Connection, ticker: str) -> None:
             data = {}
     except Exception:
         data = {}
-    (PROFILES_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_macro(conn: sa.Connection) -> None:
-    try:
-        rows = conn.execute(
-            sa.text(
-                "SELECT sp.ticker, t.company_name, sp.close, sp.date, t.asset_type "
-                "FROM stock_prices sp "
-                "JOIN tickers t ON t.ticker = sp.ticker "
-                "WHERE ("
-                "  t.asset_type IN ('index', 'fx', 'commodity') "
-                "  OR sp.ticker LIKE '^%' "
-                "  OR sp.ticker LIKE '%-X' "
-                "  OR sp.ticker LIKE '%=F' "
-                "  OR sp.ticker LIKE 'BTC-%'"
-                ") "
-                "AND sp.date = ("
-                "  SELECT MAX(sp2.date) FROM stock_prices sp2 WHERE sp2.ticker = sp.ticker"
-                ") "
-                "ORDER BY sp.ticker"
-            )
-        ).fetchall()
-        data = [
-            {
-                "ticker": r[0],
-                "name": r[1],
-                "close": r[2],
-                "date": str(r[3]),
-                "asset_type": r[4],
-            }
-            for r in rows
-        ]
-    except Exception:
-        data = []
-    (DATA_DIR / "macro.json").write_text(json.dumps(data, separators=(",", ":")))
-    print(f"Exported {len(data)} macro tickers to macro.json")
-
-
-def export_ownership(conn: sa.Connection, ticker: str) -> None:
+def export_ownership(conn: sa.Connection, ticker: str) -> str:
     try:
         summary_row = conn.execute(
             sa.text(
@@ -395,10 +352,10 @@ def export_ownership(conn: sa.Connection, ticker: str) -> None:
         data = {"summary": summary, "top_holders": top_holders}
     except Exception:
         data = {"summary": None, "top_holders": []}
-    (OWNERSHIP_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_sentiment(conn: sa.Connection, ticker: str) -> None:
+def export_sentiment(conn: sa.Connection, ticker: str) -> str:
     try:
         rows = conn.execute(
             sa.text(
@@ -422,10 +379,10 @@ def export_sentiment(conn: sa.Connection, ticker: str) -> None:
         ]
     except Exception:
         data = []
-    (SENTIMENT_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_news(conn: sa.Connection, ticker: str) -> None:
+def export_news(conn: sa.Connection, ticker: str) -> str:
     try:
         rows = conn.execute(
             sa.text(
@@ -454,10 +411,10 @@ def export_news(conn: sa.Connection, ticker: str) -> None:
         ]
     except Exception:
         data = []
-    (NEWS_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_social(conn: sa.Connection, ticker: str) -> None:
+def export_social(conn: sa.Connection, ticker: str) -> str:
     reddit: list[dict] = []
     stocktwits: list[dict] = []
 
@@ -516,10 +473,84 @@ def export_social(conn: sa.Connection, ticker: str) -> None:
         stocktwits = []
 
     data = {"reddit": reddit, "stocktwits": stocktwits}
-    (SOCIAL_DIR / f"{ticker}.json").write_text(json.dumps(data, separators=(",", ":")))
+    return json.dumps(data, separators=(",", ":"))
 
 
-def export_narratives(conn: sa.Connection) -> None:
+# ── Global export functions (return JSON string) ───────────────────────────────
+
+def export_tickers_global(conn: sa.Connection) -> tuple[str, list[str]]:
+    rows = conn.execute(
+        sa.text(
+            "SELECT ticker, company_name, sector, industry, asset_type, exchange "
+            "FROM tickers ORDER BY ticker"
+        )
+    ).fetchall()
+    tickers_data = [
+        {
+            "ticker": r[0],
+            "company_name": r[1],
+            "sector": r[2],
+            "industry": r[3],
+            "asset_type": r[4],
+            "exchange": r[5],
+        }
+        for r in rows
+    ]
+    return json.dumps(tickers_data, separators=(",", ":")), [r[0] for r in rows]
+
+
+def export_indexes_global(conn: sa.Connection) -> str:
+    try:
+        rows = conn.execute(
+            sa.text(
+                "SELECT index_id, ticker FROM index_constituents "
+                "WHERE removed_date IS NULL ORDER BY index_id, ticker"
+            )
+        ).fetchall()
+        indexes: dict[str, list[str]] = {}
+        for r in rows:
+            indexes.setdefault(r[0], []).append(r[1])
+    except Exception:
+        indexes = {}
+    return json.dumps(indexes, separators=(",", ":"))
+
+
+def export_macro_global(conn: sa.Connection) -> str:
+    try:
+        rows = conn.execute(
+            sa.text(
+                "SELECT sp.ticker, t.company_name, sp.close, sp.date, t.asset_type "
+                "FROM stock_prices sp "
+                "JOIN tickers t ON t.ticker = sp.ticker "
+                "WHERE ("
+                "  t.asset_type IN ('index', 'fx', 'commodity') "
+                "  OR sp.ticker LIKE '^%' "
+                "  OR sp.ticker LIKE '%-X' "
+                "  OR sp.ticker LIKE '%=F' "
+                "  OR sp.ticker LIKE 'BTC-%'"
+                ") "
+                "AND sp.date = ("
+                "  SELECT MAX(sp2.date) FROM stock_prices sp2 WHERE sp2.ticker = sp.ticker"
+                ") "
+                "ORDER BY sp.ticker"
+            )
+        ).fetchall()
+        data = [
+            {
+                "ticker": r[0],
+                "name": r[1],
+                "close": r[2],
+                "date": str(r[3]),
+                "asset_type": r[4],
+            }
+            for r in rows
+        ]
+    except Exception:
+        data = []
+    return json.dumps(data, separators=(",", ":"))
+
+
+def export_narratives_global(conn: sa.Connection) -> str:
     try:
         narrative_rows = conn.execute(
             sa.text(
@@ -531,7 +562,6 @@ def export_narratives(conn: sa.Connection) -> None:
         for nr in narrative_rows:
             narrative_id = nr[0]
 
-            # Related tickers — stored as JSON array in narratives.related_tickers
             try:
                 rt_row = conn.execute(
                     sa.text(
@@ -540,14 +570,12 @@ def export_narratives(conn: sa.Connection) -> None:
                     {"nid": narrative_id},
                 ).fetchone()
                 if rt_row and rt_row[0]:
-                    import json as _json
-                    related_tickers = _json.loads(rt_row[0])
+                    related_tickers = json.loads(rt_row[0])
                 else:
                     related_tickers = []
             except Exception:
                 related_tickers = []
 
-            # Last 30 days of signals
             try:
                 signal_rows = conn.execute(
                     sa.text(
@@ -581,8 +609,23 @@ def export_narratives(conn: sa.Connection) -> None:
             )
     except Exception:
         data = []
-    (DATA_DIR / "narratives.json").write_text(json.dumps(data, separators=(",", ":")))
-    print(f"Exported {len(data)} narratives to narratives.json")
+    return json.dumps(data, separators=(",", ":"))
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+
+def _collect_ticker_pairs(conn: sa.Connection, ticker: str) -> list[tuple[str, str]]:
+    return [
+        (f"prices/{ticker}.json", export_prices(conn, ticker)),
+        (f"financials/{ticker}.json", export_financials_v2(conn, ticker)),
+        (f"metadata/{ticker}.json", export_metadata(conn, ticker)),
+        (f"corporate_actions/{ticker}.json", export_corporate_actions(conn, ticker)),
+        (f"profiles/{ticker}.json", export_profiles(conn, ticker)),
+        (f"ownership/{ticker}.json", export_ownership(conn, ticker)),
+        (f"sentiment/{ticker}.json", export_sentiment(conn, ticker)),
+        (f"news/{ticker}.json", export_news(conn, ticker)),
+        (f"social/{ticker}.json", export_social(conn, ticker)),
+    ]
 
 
 def main() -> None:
@@ -598,41 +641,86 @@ def main() -> None:
         action="store_true",
         help="Skip global exports (tickers.json, indexes.json, macro.json, narratives.json)",
     )
+    parser.add_argument(
+        "--no-incremental",
+        action="store_true",
+        help="Ignore export log and export all tickers regardless of change",
+    )
     args = parser.parse_args()
 
-    setup_dirs()
     engine = get_engine()
+    log = _load_export_log()
+
+    destination = "docs/data/ (local)" if LOCAL_EXPORT else "R2"
+    print(f"Export destination: {destination}")
 
     with engine.connect() as conn:
-        all_tickers = export_tickers(conn)
+        tickers_json, all_tickers = export_tickers_global(conn)
 
+        # Global files
         if not args.skip_global:
-            export_indexes(conn)
-            export_macro(conn)
-            export_narratives(conn)
+            global_pairs = [
+                ("tickers.json", tickers_json),
+                ("indexes.json", export_indexes_global(conn)),
+                ("macro.json", export_macro_global(conn)),
+                ("narratives.json", export_narratives_global(conn)),
+            ]
+            for key, data in global_pairs:
+                _write_or_upload(key, data)
+            print(f"Exported {len(global_pairs)} global files")
 
         tickers_to_export = args.tickers if args.tickers else all_tickers
+
         # Validate requested tickers
         invalid = set(tickers_to_export) - set(all_tickers)
         if invalid:
             print(f"Warning: unknown tickers skipped: {sorted(invalid)}")
             tickers_to_export = [t for t in tickers_to_export if t not in invalid]
 
-        total = len(tickers_to_export)
-        for i, ticker in enumerate(tickers_to_export, 1):
-            export_prices(conn, ticker)
-            export_financials_v2(conn, ticker)
-            export_metadata(conn, ticker)
-            export_corporate_actions(conn, ticker)
-            export_profiles(conn, ticker)
-            export_ownership(conn, ticker)
-            export_sentiment(conn, ticker)
-            export_news(conn, ticker)
-            export_social(conn, ticker)
-            if i % 50 == 0 or i == total:
-                print(f"  {i}/{total} tickers exported")
+        # Incremental: skip unchanged tickers
+        if not args.no_incremental and not args.tickers:
+            before = len(tickers_to_export)
+            tickers_to_export = _filter_unchanged(conn, tickers_to_export, log)
+            skipped = before - len(tickers_to_export)
+            if skipped:
+                print(f"Skipping {skipped} unchanged tickers (use --no-incremental to force)")
 
-    print(f"Done. Data written to {DATA_DIR}")
+        total = len(tickers_to_export)
+        print(f"Exporting {total} tickers...")
+
+        # Collect all (key, data) pairs — sequential DB queries
+        all_uploads: list[tuple[str, str]] = []
+        for i, ticker in enumerate(tickers_to_export, 1):
+            all_uploads.extend(_collect_ticker_pairs(conn, ticker))
+            if i % 100 == 0 or i == total:
+                print(f"  Queried {i}/{total} tickers")
+
+    # Parallel uploads
+    n_uploads = len(all_uploads)
+    print(f"Uploading {n_uploads} files...")
+    upload_errors = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {pool.submit(_write_or_upload, key, data): key for key, data in all_uploads}
+        for i, fut in enumerate(concurrent.futures.as_completed(futures), 1):
+            try:
+                fut.result()
+            except Exception as exc:
+                upload_errors += 1
+                print(f"  Upload error for {futures[fut]}: {exc}")
+            if i % 1000 == 0 or i == n_uploads:
+                print(f"  Uploaded {i}/{n_uploads} files")
+
+    if upload_errors == 0:
+        # Update export log for successfully exported tickers
+        now = datetime.now(timezone.utc).isoformat()
+        for ticker in tickers_to_export:
+            log[ticker] = now
+        _save_export_log(log)
+        print(f"Export log updated for {total} tickers")
+    else:
+        print(f"Warning: {upload_errors} upload errors — export log not updated")
+
+    print(f"Done. {n_uploads - upload_errors}/{n_uploads} files exported successfully.")
 
 
 if __name__ == "__main__":

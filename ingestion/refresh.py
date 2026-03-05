@@ -30,7 +30,7 @@ def get_last_dates(engine: sa.Engine, tickers: list[str]) -> dict[str, Optional[
     last: dict[str, Optional[date]] = {t: None for t in tickers}
     for row in rows:
         if row.ticker in last:
-            last[row.ticker] = date.fromisoformat(row.max_date)
+            last[row.ticker] = date.fromisoformat(str(row.max_date))
     return last
 
 
