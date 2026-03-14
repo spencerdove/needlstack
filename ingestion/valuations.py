@@ -68,6 +68,35 @@ def _get_ttm_income(conn: sa.Connection, ticker: str) -> dict:
     }
 
 
+def _get_ttm_cashflow(conn: sa.Connection, ticker: str) -> dict:
+    """Sum the last 4 quarterly cash flow rows for TTM computation."""
+    rows = conn.execute(
+        sa.text(
+            """
+            SELECT free_cash_flow, depreciation_amortization
+            FROM cash_flows
+            WHERE ticker = :ticker
+              AND period_type = 'Q'
+            ORDER BY period_end DESC
+            LIMIT 4
+            """
+        ),
+        {"ticker": ticker},
+    ).fetchall()
+
+    if not rows:
+        return {"free_cash_flow": None, "depreciation_amortization": None}
+
+    def _sum_col(idx: int) -> Optional[float]:
+        vals = [r[idx] for r in rows if r[idx] is not None]
+        return sum(vals) if vals else None
+
+    return {
+        "free_cash_flow": _sum_col(0),
+        "depreciation_amortization": _sum_col(1),
+    }
+
+
 def _get_latest_price(conn: sa.Connection, ticker: str) -> Optional[float]:
     """Return the most recent closing price for ticker."""
     row = conn.execute(
@@ -131,9 +160,11 @@ def _upsert_valuations(engine: sa.Engine, rows: list[dict]) -> int:
             sa.text(
                 """
                 INSERT OR REPLACE INTO valuation_snapshots
-                    (ticker, snapshot_date, pe_ttm, pb, ps_ttm, ev_ebitda, peg_ratio)
+                    (ticker, snapshot_date, pe_ttm, pb, ps_ttm, ev_ebitda, peg_ratio,
+                     ev_ebit, ev_revenue, p_fcf)
                 VALUES
-                    (:ticker, :snapshot_date, :pe_ttm, :pb, :ps_ttm, :ev_ebitda, :peg_ratio)
+                    (:ticker, :snapshot_date, :pe_ttm, :pb, :ps_ttm, :ev_ebitda, :peg_ratio,
+                     :ev_ebit, :ev_revenue, :p_fcf)
                 """
             ),
             rows,
@@ -162,6 +193,7 @@ def compute_valuations(
         for ticker in tickers:
             try:
                 ttm = _get_ttm_income(conn, ticker)
+                ttm_cf = _get_ttm_cashflow(conn, ticker)
                 latest_price = _get_latest_price(conn, ticker)
                 meta = _get_security_metadata(conn, ticker)
                 equity = _get_latest_equity(conn, ticker)
@@ -177,8 +209,23 @@ def compute_valuations(
                 # P/S TTM = market_cap / TTM revenue
                 ps_ttm = _safe_div(meta["market_cap"], ttm["revenue"])
 
-                # EV/EBITDA = enterprise_value / TTM operating_income (proxy)
-                ev_ebitda = _safe_div(meta["enterprise_value"], ttm["operating_income"])
+                # EV/EBITDA = enterprise_value / (TTM operating_income + TTM D&A)
+                ttm_da = ttm_cf.get("depreciation_amortization")
+                ttm_op = ttm["operating_income"]
+                if ttm_op is not None and ttm_da is not None:
+                    ebitda_val = ttm_op + ttm_da
+                else:
+                    ebitda_val = ttm_op  # fallback to proxy
+                ev_ebitda = _safe_div(meta["enterprise_value"], ebitda_val)
+
+                # EV/EBIT = enterprise_value / TTM operating_income
+                ev_ebit = _safe_div(meta["enterprise_value"], ttm["operating_income"])
+
+                # EV/Revenue = enterprise_value / TTM revenue
+                ev_revenue = _safe_div(meta["enterprise_value"], ttm["revenue"])
+
+                # P/FCF = market_cap / TTM free_cash_flow
+                p_fcf = _safe_div(meta["market_cap"], ttm_cf.get("free_cash_flow"))
 
                 rows = [{
                     "ticker": ticker,
@@ -188,13 +235,17 @@ def compute_valuations(
                     "ps_ttm": ps_ttm,
                     "ev_ebitda": ev_ebitda,
                     "peg_ratio": None,  # not computed here
+                    "ev_ebit": ev_ebit,
+                    "ev_revenue": ev_revenue,
+                    "p_fcf": p_fcf,
                 }]
 
                 inserted = _upsert_valuations(engine, rows)
                 total_rows += inserted
                 logger.debug(
                     f"{ticker}: valuation_snapshot upserted "
-                    f"(P/E={pe_ttm}, P/B={pb}, P/S={ps_ttm}, EV/EBITDA={ev_ebitda})"
+                    f"(P/E={pe_ttm}, P/B={pb}, P/S={ps_ttm}, EV/EBITDA={ev_ebitda}, "
+                    f"EV/EBIT={ev_ebit}, EV/Rev={ev_revenue}, P/FCF={p_fcf})"
                 )
 
             except Exception as exc:

@@ -204,7 +204,7 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
     try:
         vs_rows = conn.execute(
             sa.text(
-                "SELECT snapshot_date, pe_ttm, pb, ps_ttm, ev_ebitda "
+                "SELECT snapshot_date, pe_ttm, pb, ps_ttm, ev_ebitda, ev_ebit, ev_revenue, p_fcf "
                 "FROM valuation_snapshots WHERE ticker = :ticker "
                 "ORDER BY snapshot_date DESC LIMIT 252"
             ),
@@ -217,6 +217,9 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
                 "pb": r[2],
                 "ps_ttm": r[3],
                 "ev_ebitda": r[4],
+                "ev_ebit": r[5],
+                "ev_revenue": r[6],
+                "p_fcf": r[7],
             }
             for r in reversed(vs_rows)
         ]
@@ -476,6 +479,47 @@ def export_social(conn: sa.Connection, ticker: str) -> str:
     return json.dumps(data, separators=(",", ":"))
 
 
+def export_derived_metrics(conn: sa.Connection, ticker: str) -> str:
+    """Export derived metrics: latest snapshot + last 8 quarterly history."""
+    _ALL_METRIC_COLS = (
+        "date, revenue_yoy_growth, net_income_yoy_growth, eps_yoy_growth, "
+        "gross_margin, operating_margin, net_margin, fcf_margin, pretax_margin, "
+        "ocf_margin, ebitda_margin, capex_to_revenue, roe, roa, roic, roce, "
+        "debt_to_equity, current_ratio, quick_ratio, cash_ratio, working_capital, net_debt, "
+        "debt_to_assets, debt_to_capital, equity_ratio, net_debt_to_ebitda, "
+        "debt_to_ebitda, interest_coverage, asset_turnover, inventory_turnover, "
+        "receivables_turnover, payables_turnover, dso, dio, dpo, ccc, "
+        "ocf_per_share, fcf_per_share, cash_conversion_ratio, accrual_ratio, "
+        "book_value_per_share, tangible_book_value_per_share, "
+        "ebitda, ocf_ttm, fcf_ttm, "
+        "revenue_qoq_growth, operating_income_yoy_growth, ocf_yoy_growth, fcf_yoy_growth, "
+        "ebitda_yoy_growth, revenue_3yr_cagr, revenue_5yr_cagr, eps_3yr_cagr, eps_5yr_cagr, "
+        "dividend_yield, dividend_payout_ratio, buyback_yield, shareholder_yield, "
+        "pe_ttm, ev_ebitda"
+    )
+    _COL_NAMES = [c.strip() for c in _ALL_METRIC_COLS.split(",")]
+
+    def _row_to_dict(r):
+        return {col: r[i] for i, col in enumerate(_COL_NAMES)}
+
+    try:
+        rows = conn.execute(
+            sa.text(
+                f"SELECT {_ALL_METRIC_COLS} FROM derived_metrics "
+                "WHERE ticker = :ticker ORDER BY date DESC LIMIT 8"
+            ),
+            {"ticker": ticker},
+        ).fetchall()
+        if not rows:
+            return json.dumps({"latest": None, "history": []}, separators=(",", ":"))
+        latest = _row_to_dict(rows[0])
+        history = [_row_to_dict(r) for r in rows]
+        data = {"latest": latest, "history": history}
+    except Exception:
+        data = {"latest": None, "history": []}
+    return json.dumps(data, separators=(",", ":"))
+
+
 # ── Global export functions (return JSON string) ───────────────────────────────
 
 def export_tickers_global(conn: sa.Connection) -> tuple[str, list[str]]:
@@ -625,6 +669,7 @@ def _collect_ticker_pairs(conn: sa.Connection, ticker: str) -> list[tuple[str, s
         (f"sentiment/{ticker}.json", export_sentiment(conn, ticker)),
         (f"news/{ticker}.json", export_news(conn, ticker)),
         (f"social/{ticker}.json", export_social(conn, ticker)),
+        (f"metrics/{ticker}.json", export_derived_metrics(conn, ticker)),
     ]
 
 

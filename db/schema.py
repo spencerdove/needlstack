@@ -90,6 +90,7 @@ income_statements_table = sa.Table(
     sa.Column("eps_diluted", sa.Float),
     sa.Column("shares_basic", sa.Float),
     sa.Column("shares_diluted", sa.Float),
+    sa.Column("interest_expense", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "period_end", "period_type"),
 )
 
@@ -109,6 +110,11 @@ balance_sheets_table = sa.Table(
     sa.Column("total_liabilities", sa.Float),
     sa.Column("stockholders_equity", sa.Float),
     sa.Column("retained_earnings", sa.Float),
+    sa.Column("inventory", sa.Float),
+    sa.Column("accounts_receivable", sa.Float),
+    sa.Column("short_term_debt", sa.Float),
+    sa.Column("goodwill", sa.Float),
+    sa.Column("intangible_assets", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "period_end", "period_type"),
 )
 
@@ -126,6 +132,7 @@ cash_flows_table = sa.Table(
     sa.Column("dividends_paid", sa.Float),
     sa.Column("stock_repurchases", sa.Float),
     sa.Column("free_cash_flow", sa.Float),
+    sa.Column("depreciation_amortization", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "period_end", "period_type"),
 )
 
@@ -205,6 +212,9 @@ valuation_snapshots_table = sa.Table(
     sa.Column("ps_ttm", sa.Float),
     sa.Column("ev_ebitda", sa.Float),
     sa.Column("peg_ratio", sa.Float),
+    sa.Column("ev_ebit", sa.Float),
+    sa.Column("ev_revenue", sa.Float),
+    sa.Column("p_fcf", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "snapshot_date"),
 )
 
@@ -406,6 +416,62 @@ derived_metrics_table = sa.Table(
     sa.Column("current_ratio", sa.Float),
     sa.Column("pe_ttm", sa.Float),
     sa.Column("ev_ebitda", sa.Float),
+    # Growth
+    sa.Column("revenue_qoq_growth", sa.Float),
+    sa.Column("operating_income_yoy_growth", sa.Float),
+    sa.Column("ocf_yoy_growth", sa.Float),
+    sa.Column("fcf_yoy_growth", sa.Float),
+    sa.Column("ebitda_yoy_growth", sa.Float),
+    sa.Column("revenue_3yr_cagr", sa.Float),
+    sa.Column("revenue_5yr_cagr", sa.Float),
+    sa.Column("eps_3yr_cagr", sa.Float),
+    sa.Column("eps_5yr_cagr", sa.Float),
+    # Margins
+    sa.Column("pretax_margin", sa.Float),
+    sa.Column("ocf_margin", sa.Float),
+    sa.Column("ebitda_margin", sa.Float),
+    sa.Column("capex_to_revenue", sa.Float),
+    # Returns
+    sa.Column("roic", sa.Float),
+    sa.Column("roce", sa.Float),
+    # Cash flow
+    sa.Column("ocf_per_share", sa.Float),
+    sa.Column("fcf_per_share", sa.Float),
+    sa.Column("cash_conversion_ratio", sa.Float),
+    sa.Column("accrual_ratio", sa.Float),
+    # Liquidity
+    sa.Column("quick_ratio", sa.Float),
+    sa.Column("cash_ratio", sa.Float),
+    sa.Column("working_capital", sa.Float),
+    sa.Column("net_debt", sa.Float),
+    # Leverage
+    sa.Column("debt_to_assets", sa.Float),
+    sa.Column("debt_to_capital", sa.Float),
+    sa.Column("equity_ratio", sa.Float),
+    sa.Column("net_debt_to_ebitda", sa.Float),
+    sa.Column("debt_to_ebitda", sa.Float),
+    sa.Column("interest_coverage", sa.Float),
+    # Efficiency
+    sa.Column("asset_turnover", sa.Float),
+    sa.Column("inventory_turnover", sa.Float),
+    sa.Column("receivables_turnover", sa.Float),
+    sa.Column("payables_turnover", sa.Float),
+    sa.Column("dso", sa.Float),
+    sa.Column("dio", sa.Float),
+    sa.Column("dpo", sa.Float),
+    sa.Column("ccc", sa.Float),
+    # Per-share
+    sa.Column("book_value_per_share", sa.Float),
+    sa.Column("tangible_book_value_per_share", sa.Float),
+    # Absolute values
+    sa.Column("ebitda", sa.Float),
+    sa.Column("ocf_ttm", sa.Float),
+    sa.Column("fcf_ttm", sa.Float),
+    # Shareholder returns
+    sa.Column("dividend_yield", sa.Float),
+    sa.Column("dividend_payout_ratio", sa.Float),
+    sa.Column("buyback_yield", sa.Float),
+    sa.Column("shareholder_yield", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "date"),
 )
 
@@ -470,6 +536,49 @@ def run_migrations(engine: sa.Engine) -> None:
         if _sqlite_table_exists(conn, "stock_prices") and not _sqlite_column_exists(conn, "stock_prices", "dollar_volume"):
             conn.execute(sa.text("ALTER TABLE stock_prices ADD COLUMN dollar_volume REAL"))
             conn.commit()
+
+        # income_statements: metrics expansion
+        for col in ["interest_expense"]:
+            if _sqlite_table_exists(conn, "income_statements") and not _sqlite_column_exists(conn, "income_statements", col):
+                conn.execute(sa.text(f"ALTER TABLE income_statements ADD COLUMN {col} REAL"))
+                conn.commit()
+
+        # balance_sheets: metrics expansion
+        for col in ["inventory", "accounts_receivable", "short_term_debt", "goodwill", "intangible_assets"]:
+            if _sqlite_table_exists(conn, "balance_sheets") and not _sqlite_column_exists(conn, "balance_sheets", col):
+                conn.execute(sa.text(f"ALTER TABLE balance_sheets ADD COLUMN {col} REAL"))
+                conn.commit()
+
+        # cash_flows: metrics expansion
+        for col in ["depreciation_amortization"]:
+            if _sqlite_table_exists(conn, "cash_flows") and not _sqlite_column_exists(conn, "cash_flows", col):
+                conn.execute(sa.text(f"ALTER TABLE cash_flows ADD COLUMN {col} REAL"))
+                conn.commit()
+
+        # valuation_snapshots: metrics expansion
+        for col in ["ev_ebit", "ev_revenue", "p_fcf"]:
+            if _sqlite_table_exists(conn, "valuation_snapshots") and not _sqlite_column_exists(conn, "valuation_snapshots", col):
+                conn.execute(sa.text(f"ALTER TABLE valuation_snapshots ADD COLUMN {col} REAL"))
+                conn.commit()
+
+        # derived_metrics: metrics expansion
+        _new_derived_cols = [
+            "revenue_qoq_growth", "operating_income_yoy_growth", "ocf_yoy_growth",
+            "fcf_yoy_growth", "ebitda_yoy_growth", "revenue_3yr_cagr", "revenue_5yr_cagr",
+            "eps_3yr_cagr", "eps_5yr_cagr", "pretax_margin", "ocf_margin", "ebitda_margin",
+            "capex_to_revenue", "roic", "roce", "ocf_per_share", "fcf_per_share",
+            "cash_conversion_ratio", "accrual_ratio", "quick_ratio", "cash_ratio",
+            "working_capital", "net_debt", "debt_to_assets", "debt_to_capital",
+            "equity_ratio", "net_debt_to_ebitda", "debt_to_ebitda", "interest_coverage",
+            "asset_turnover", "inventory_turnover", "receivables_turnover", "payables_turnover",
+            "dso", "dio", "dpo", "ccc", "book_value_per_share", "tangible_book_value_per_share",
+            "ebitda", "ocf_ttm", "fcf_ttm", "dividend_yield", "dividend_payout_ratio",
+            "buyback_yield", "shareholder_yield",
+        ]
+        for col in _new_derived_cols:
+            if _sqlite_table_exists(conn, "derived_metrics") and not _sqlite_column_exists(conn, "derived_metrics", col):
+                conn.execute(sa.text(f"ALTER TABLE derived_metrics ADD COLUMN {col} REAL"))
+                conn.commit()
 
         # Performance indexes
         for idx_sql in [

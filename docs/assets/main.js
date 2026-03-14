@@ -375,11 +375,14 @@ async function loadTickerData(ticker) {
     const news = newsRes.ok ? await newsRes.json() : [];
     const social = socialRes.ok ? await socialRes.json() : { reddit: [], stocktwits: [] };
 
-    state.cache[ticker] = { prices, financials, metadata, corporateActions, profile, ownership, sentiment, news, social };
+      const metricsRes = await fetch(`${DATA_BASE_URL}/metrics/${ticker}.json`).catch(() => null);
+    const metrics = metricsRes && metricsRes.ok ? await metricsRes.json() : { latest: null, history: [] };
+
+    state.cache[ticker] = { prices, financials, metadata, corporateActions, profile, ownership, sentiment, news, social, metrics };
     setStatus(`Loaded ${ticker} — ${prices.length} price points`);
   } catch (err) {
     console.error(`Failed to load ${ticker}:`, err);
-    state.cache[ticker] = { prices: [], financials: {}, metadata: {}, corporateActions: [], profile: {}, ownership: { summary: null, top_holders: [] }, sentiment: [], news: [], social: { reddit: [], stocktwits: [] } };
+    state.cache[ticker] = { prices: [], financials: {}, metadata: {}, corporateActions: [], profile: {}, ownership: { summary: null, top_holders: [] }, sentiment: [], news: [], social: { reddit: [], stocktwits: [] }, metrics: { latest: null, history: [] } };
   } finally {
     state.loading.delete(ticker);
     showLoading(false);
@@ -707,6 +710,7 @@ function buildTabBar() {
     { id: 'news',       label: 'News' },
     { id: 'social',     label: 'Social' },
     { id: 'narratives', label: 'Narratives' },
+    { id: 'metrics',    label: 'Metrics' },
     { id: 'chat',       label: 'AI Chat' },
   ];
   for (const tab of tabs) {
@@ -746,6 +750,7 @@ function renderTabContent() {
       case 'news':        renderNewsTab(content, ticker, cached); break;
       case 'social':      renderSocialTab(content, ticker, cached); break;
       case 'narratives':  renderNarrativesTab(content); break;
+      case 'metrics':     renderMetricsTab(content, ticker, cached); break;
       case 'chat':        renderChatTab(content); break;
       default:            content.innerHTML = ''; break;
     }
@@ -957,6 +962,173 @@ async function sendChatMessage() {
     assistantEl.textContent = `Error: ${err.message}. Make sure api.needlstack.com is deployed.`;
   }
   messages.scrollTop = messages.scrollHeight;
+}
+
+// ── Metrics tab ────────────────────────────────────────────────────────────
+
+function fmtPct(v)  { return v != null ? (v * 100).toFixed(1) + '%' : '\u2014'; }
+function fmtMult(v) { return v != null ? v.toFixed(1) + 'x' : '\u2014'; }
+function fmtBn(v)   { return v != null ? '$' + (v / 1e9).toFixed(1) + 'B' : '\u2014'; }
+function fmtNum(v)  { return v != null ? v.toFixed(2) : '\u2014'; }
+function fmtDays(v) { return v != null ? Math.round(v) + 'd' : '\u2014'; }
+
+function renderMetricsTab(content, ticker, cached) {
+  const m = cached.metrics?.latest;
+  const history = cached.metrics?.history || [];
+  const fin = cached.financials || {};
+  const meta = cached.metadata || {};
+
+  const latestVal = fin.valuation_snapshots?.[fin.valuation_snapshots.length - 1] || {};
+
+  if (!m && !latestVal.pe_ttm) {
+    content.innerHTML = `<p class="tab-empty">No metrics data for ${ticker}. Run daily_metrics.py to compute metrics.</p>`;
+    return;
+  }
+
+  // For trend: compare latest vs second entry in history
+  const prev = history.length > 1 ? history[1] : null;
+  function trend(key, higherIsBetter = true) {
+    if (!prev || m == null) return '';
+    const cur = m[key], p = prev[key];
+    if (cur == null || p == null) return '';
+    const up = cur > p;
+    const cls = (up === higherIsBetter) ? 'trend-up' : 'trend-down';
+    return `<span class="${cls}">${up ? '\u2191' : '\u2193'}</span>`;
+  }
+
+  function card(label, value, trendHtml = '') {
+    return `<div class="metric-card"><span class="metric-label">${label}</span><span class="metric-value">${value}${trendHtml ? ' ' + trendHtml : ''}</span></div>`;
+  }
+
+  const ttmRevenue = (() => {
+    const stmts = (fin.income_statements || []).filter(r => r.period_type === 'Q').slice(-4);
+    if (stmts.length < 4) return null;
+    return stmts.reduce((s, r) => s + (r.revenue || 0), 0);
+  })();
+
+  const sections = [
+    {
+      label: 'Profitability',
+      cards: [
+        card('Revenue (TTM)', fmtBn(ttmRevenue)),
+        card('Gross Margin', fmtPct(m?.gross_margin), trend('gross_margin')),
+        card('Operating Margin', fmtPct(m?.operating_margin), trend('operating_margin')),
+        card('Net Margin', fmtPct(m?.net_margin), trend('net_margin')),
+        card('EBITDA Margin', fmtPct(m?.ebitda_margin), trend('ebitda_margin')),
+        card('Pretax Margin', fmtPct(m?.pretax_margin), trend('pretax_margin')),
+      ],
+    },
+    {
+      label: 'Growth',
+      cards: [
+        card('Revenue YoY', fmtPct(m?.revenue_yoy_growth), trend('revenue_yoy_growth')),
+        card('Revenue QoQ', fmtPct(m?.revenue_qoq_growth), trend('revenue_qoq_growth')),
+        card('Revenue 3Y CAGR', fmtPct(m?.revenue_3yr_cagr)),
+        card('Revenue 5Y CAGR', fmtPct(m?.revenue_5yr_cagr)),
+        card('EPS YoY', fmtPct(m?.eps_yoy_growth), trend('eps_yoy_growth')),
+        card('EPS 3Y CAGR', fmtPct(m?.eps_3yr_cagr)),
+        card('Op. Income YoY', fmtPct(m?.operating_income_yoy_growth), trend('operating_income_yoy_growth')),
+        card('EBITDA YoY', fmtPct(m?.ebitda_yoy_growth), trend('ebitda_yoy_growth')),
+        card('FCF YoY', fmtPct(m?.fcf_yoy_growth), trend('fcf_yoy_growth')),
+      ],
+    },
+    {
+      label: 'Cash Flow',
+      cards: [
+        card('OCF (TTM)', fmtBn(m?.ocf_ttm), trend('ocf_ttm')),
+        card('FCF (TTM)', fmtBn(m?.fcf_ttm), trend('fcf_ttm')),
+        card('EBITDA', fmtBn(m?.ebitda), trend('ebitda')),
+        card('OCF Margin', fmtPct(m?.ocf_margin), trend('ocf_margin')),
+        card('FCF Margin', fmtPct(m?.fcf_margin), trend('fcf_margin')),
+        card('OCF/Share', fmtNum(m?.ocf_per_share), trend('ocf_per_share')),
+        card('FCF/Share', fmtNum(m?.fcf_per_share), trend('fcf_per_share')),
+        card('Cash Conv. Ratio', fmtNum(m?.cash_conversion_ratio), trend('cash_conversion_ratio')),
+        card('CapEx/Revenue', fmtPct(m?.capex_to_revenue), trend('capex_to_revenue', false)),
+      ],
+    },
+    {
+      label: 'Returns',
+      cards: [
+        card('ROE', fmtPct(m?.roe), trend('roe')),
+        card('ROA', fmtPct(m?.roa), trend('roa')),
+        card('ROIC', fmtPct(m?.roic), trend('roic')),
+        card('ROCE', fmtPct(m?.roce), trend('roce')),
+      ],
+    },
+    {
+      label: 'Liquidity',
+      cards: [
+        card('Current Ratio', fmtNum(m?.current_ratio), trend('current_ratio')),
+        card('Quick Ratio', fmtNum(m?.quick_ratio), trend('quick_ratio')),
+        card('Cash Ratio', fmtNum(m?.cash_ratio), trend('cash_ratio')),
+        card('Working Capital', fmtBn(m?.working_capital), trend('working_capital')),
+        card('Net Debt', fmtBn(m?.net_debt), trend('net_debt', false)),
+      ],
+    },
+    {
+      label: 'Leverage',
+      cards: [
+        card('Debt/Equity', fmtNum(m?.debt_to_equity), trend('debt_to_equity', false)),
+        card('Debt/Assets', fmtNum(m?.debt_to_assets), trend('debt_to_assets', false)),
+        card('Debt/Capital', fmtPct(m?.debt_to_capital), trend('debt_to_capital', false)),
+        card('Equity Ratio', fmtPct(m?.equity_ratio), trend('equity_ratio')),
+        card('Interest Coverage', fmtNum(m?.interest_coverage), trend('interest_coverage')),
+        card('Net Debt/EBITDA', fmtNum(m?.net_debt_to_ebitda), trend('net_debt_to_ebitda', false)),
+      ],
+    },
+    {
+      label: 'Efficiency',
+      cards: [
+        card('Asset Turnover', fmtNum(m?.asset_turnover), trend('asset_turnover')),
+        card('Inventory Turnover', fmtNum(m?.inventory_turnover), trend('inventory_turnover')),
+        card('Receivables Turnover', fmtNum(m?.receivables_turnover), trend('receivables_turnover')),
+        card('DSO', fmtDays(m?.dso), trend('dso', false)),
+        card('DIO', fmtDays(m?.dio), trend('dio', false)),
+        card('DPO', fmtDays(m?.dpo), trend('dpo')),
+        card('CCC', fmtDays(m?.ccc), trend('ccc', false)),
+      ],
+    },
+    {
+      label: 'Per Share',
+      cards: [
+        card('Book Value/Share', fmtNum(m?.book_value_per_share), trend('book_value_per_share')),
+        card('Tangible Book/Share', fmtNum(m?.tangible_book_value_per_share), trend('tangible_book_value_per_share')),
+        card('OCF/Share', fmtNum(m?.ocf_per_share), trend('ocf_per_share')),
+        card('FCF/Share', fmtNum(m?.fcf_per_share), trend('fcf_per_share')),
+      ],
+    },
+    {
+      label: 'Valuation',
+      cards: [
+        card('P/E TTM', fmtMult(m?.pe_ttm || latestVal.pe_ttm)),
+        card('P/B', fmtMult(latestVal.pb)),
+        card('P/S', fmtMult(latestVal.ps_ttm)),
+        card('P/FCF', fmtMult(latestVal.p_fcf)),
+        card('EV/EBITDA', fmtMult(m?.ev_ebitda || latestVal.ev_ebitda)),
+        card('EV/EBIT', fmtMult(latestVal.ev_ebit)),
+        card('EV/Revenue', fmtMult(latestVal.ev_revenue)),
+      ],
+    },
+    {
+      label: 'Shareholder Returns',
+      cards: [
+        card('Dividend Yield', fmtPct(m?.dividend_yield), trend('dividend_yield')),
+        card('Payout Ratio', fmtPct(m?.dividend_payout_ratio), trend('dividend_payout_ratio', false)),
+        card('Buyback Yield', fmtPct(m?.buyback_yield), trend('buyback_yield')),
+        card('Shareholder Yield', fmtPct(m?.shareholder_yield), trend('shareholder_yield')),
+      ],
+    },
+  ];
+
+  let html = `<div class="tab-section metrics-dashboard">`;
+  for (const section of sections) {
+    html += `<div class="metric-category">${section.label}</div>`;
+    html += `<div class="metrics-grid">`;
+    html += section.cards.join('');
+    html += `</div>`;
+  }
+  html += `</div>`;
+  content.innerHTML = html;
 }
 
 // ── Utility helpers ────────────────────────────────────────────────────────

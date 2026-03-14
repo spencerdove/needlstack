@@ -36,6 +36,7 @@ TAG_MAP: dict[str, list[str]] = {
     "eps_diluted": ["EarningsPerShareDiluted"],
     "shares_basic": ["WeightedAverageNumberOfSharesOutstandingBasic"],
     "shares_diluted": ["WeightedAverageNumberOfDilutedSharesOutstanding"],
+    "interest_expense": ["InterestExpense", "InterestAndDebtExpense"],
     # Balance sheet
     "cash": [
         "CashAndCashEquivalentsAtCarryingValue",
@@ -52,6 +53,15 @@ TAG_MAP: dict[str, list[str]] = {
         "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
     ],
     "retained_earnings": ["RetainedEarningsAccumulatedDeficit"],
+    "inventory": ["InventoryNet", "InventoryFinishedGoods"],
+    "accounts_receivable": ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"],
+    "short_term_debt": ["ShortTermBorrowings", "LongTermDebtCurrent", "DebtCurrent"],
+    "goodwill": ["Goodwill"],
+    "intangible_assets": [
+        "FiniteLivedIntangibleAssetsNet",
+        "IntangibleAssetsNetExcludingGoodwill",
+        "IntangibleAssetsNet",
+    ],
     # Cash flow
     "operating_cf": ["NetCashProvidedByUsedInOperatingActivities"],
     "capex": ["PaymentsToAcquirePropertyPlantAndEquipment"],
@@ -59,22 +69,27 @@ TAG_MAP: dict[str, list[str]] = {
     "financing_cf": ["NetCashProvidedByUsedInFinancingActivities"],
     "dividends_paid": ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"],
     "stock_repurchases": ["PaymentsForRepurchaseOfCommonStock"],
+    "depreciation_amortization": [
+        "DepreciationDepletionAndAmortization",
+        "DepreciationAndAmortization",
+    ],
 }
 
 # Which columns belong to which table
 INCOME_COLS = {
     "revenue", "cost_of_revenue", "gross_profit", "operating_income",
     "pretax_income", "income_tax", "net_income", "eps_basic", "eps_diluted",
-    "shares_basic", "shares_diluted",
+    "shares_basic", "shares_diluted", "interest_expense",
 }
 BALANCE_COLS = {
     "cash", "current_assets", "total_assets", "accounts_payable",
     "current_liabilities", "long_term_debt", "total_liabilities",
     "stockholders_equity", "retained_earnings",
+    "inventory", "accounts_receivable", "short_term_debt", "goodwill", "intangible_assets",
 }
 CASHFLOW_COLS = {
     "operating_cf", "capex", "investing_cf", "financing_cf",
-    "dividends_paid", "stock_repurchases",
+    "dividends_paid", "stock_repurchases", "depreciation_amortization",
 }
 
 # EPS and share counts use "shares" unit rather than "USD"
@@ -243,12 +258,12 @@ def _upsert_income(engine: sa.Engine, rows: list[dict]) -> int:
                     (ticker, period_end, period_type, fiscal_year, fiscal_quarter,
                      form_type, filed_date, revenue, cost_of_revenue, gross_profit,
                      operating_income, pretax_income, income_tax, net_income,
-                     eps_basic, eps_diluted, shares_basic, shares_diluted)
+                     eps_basic, eps_diluted, shares_basic, shares_diluted, interest_expense)
                 VALUES
                     (:ticker, :period_end, :period_type, :fiscal_year, :fiscal_quarter,
                      :form_type, :filed_date, :revenue, :cost_of_revenue, :gross_profit,
                      :operating_income, :pretax_income, :income_tax, :net_income,
-                     :eps_basic, :eps_diluted, :shares_basic, :shares_diluted)
+                     :eps_basic, :eps_diluted, :shares_basic, :shares_diluted, :interest_expense)
                 """
             ),
             rows,
@@ -267,12 +282,14 @@ def _upsert_balance(engine: sa.Engine, rows: list[dict]) -> int:
                     (ticker, period_end, period_type, filed_date, cash,
                      current_assets, total_assets, accounts_payable,
                      current_liabilities, long_term_debt, total_liabilities,
-                     stockholders_equity, retained_earnings)
+                     stockholders_equity, retained_earnings,
+                     inventory, accounts_receivable, short_term_debt, goodwill, intangible_assets)
                 VALUES
                     (:ticker, :period_end, :period_type, :filed_date, :cash,
                      :current_assets, :total_assets, :accounts_payable,
                      :current_liabilities, :long_term_debt, :total_liabilities,
-                     :stockholders_equity, :retained_earnings)
+                     :stockholders_equity, :retained_earnings,
+                     :inventory, :accounts_receivable, :short_term_debt, :goodwill, :intangible_assets)
                 """
             ),
             rows,
@@ -290,11 +307,11 @@ def _upsert_cashflow(engine: sa.Engine, rows: list[dict]) -> int:
                 INSERT OR REPLACE INTO cash_flows
                     (ticker, period_end, period_type, filed_date, operating_cf,
                      capex, investing_cf, financing_cf, dividends_paid,
-                     stock_repurchases, free_cash_flow)
+                     stock_repurchases, free_cash_flow, depreciation_amortization)
                 VALUES
                     (:ticker, :period_end, :period_type, :filed_date, :operating_cf,
                      :capex, :investing_cf, :financing_cf, :dividends_paid,
-                     :stock_repurchases, :free_cash_flow)
+                     :stock_repurchases, :free_cash_flow, :depreciation_amortization)
                 """
             ),
             rows,
