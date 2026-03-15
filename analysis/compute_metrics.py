@@ -128,7 +128,8 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
                 """
                 SELECT period_end, period_type, revenue, gross_profit,
                        operating_income, net_income, eps_diluted,
-                       pretax_income, income_tax, cost_of_revenue, interest_expense
+                       pretax_income, income_tax, cost_of_revenue, interest_expense,
+                       sga, rd_expense
                 FROM income_statements
                 WHERE ticker = :ticker
                 ORDER BY period_end DESC
@@ -145,7 +146,8 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
                 SELECT period_end, period_type, current_assets, current_liabilities,
                        long_term_debt, stockholders_equity, total_assets,
                        cash, accounts_payable, inventory, accounts_receivable,
-                       goodwill, intangible_assets, short_term_debt, total_liabilities
+                       goodwill, intangible_assets, short_term_debt, total_liabilities,
+                       ppe_net
                 FROM balance_sheets
                 WHERE ticker = :ticker
                 ORDER BY period_end DESC
@@ -223,12 +225,16 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
     ttm_cost_of_revenue = None
     ttm_interest_expense = None
 
+    ttm_sga = None
+    ttm_rd_expense = None
+
     if is_rows:
         is_df = pd.DataFrame(
             is_rows,
             columns=["period_end", "period_type", "revenue", "gross_profit",
                      "operating_income", "net_income", "eps_diluted",
-                     "pretax_income", "income_tax", "cost_of_revenue", "interest_expense"],
+                     "pretax_income", "income_tax", "cost_of_revenue", "interest_expense",
+                     "sga", "rd_expense"],
         )
 
         ttm_revenue = _compute_ttm(is_df, "revenue")
@@ -240,6 +246,8 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
         ttm_income_tax = _compute_ttm(is_df, "income_tax")
         ttm_cost_of_revenue = _compute_ttm(is_df, "cost_of_revenue")
         ttm_interest_expense = _compute_ttm(is_df, "interest_expense")
+        ttm_sga = _compute_ttm(is_df, "sga")
+        ttm_rd_expense = _compute_ttm(is_df, "rd_expense")
 
         prior_revenue = _compute_ttm_prior_year(is_df, "revenue")
         prior_net_income = _compute_ttm_prior_year(is_df, "net_income")
@@ -255,6 +263,8 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
         metrics["operating_margin"] = _safe_divide(ttm_operating_income, ttm_revenue)
         metrics["net_margin"] = _safe_divide(ttm_net_income, ttm_revenue)
         metrics["pretax_margin"] = _safe_divide(ttm_pretax_income, ttm_revenue)
+        metrics["sga_margin"] = _safe_divide(ttm_sga, ttm_revenue)
+        metrics["rd_margin"] = _safe_divide(ttm_rd_expense, ttm_revenue)
 
         # QoQ revenue growth (latest quarter vs prior quarter)
         quarterly_sorted = is_df[is_df["period_type"] == "Q"].sort_values("period_end", ascending=False)
@@ -281,8 +291,9 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
     else:
         for key in ["revenue_yoy_growth", "net_income_yoy_growth", "eps_yoy_growth",
                     "operating_income_yoy_growth", "gross_margin", "operating_margin",
-                    "net_margin", "pretax_margin", "revenue_qoq_growth",
-                    "revenue_3yr_cagr", "revenue_5yr_cagr", "eps_3yr_cagr", "eps_5yr_cagr"]:
+                    "net_margin", "pretax_margin", "sga_margin", "rd_margin",
+                    "revenue_qoq_growth", "revenue_3yr_cagr", "revenue_5yr_cagr",
+                    "eps_3yr_cagr", "eps_5yr_cagr"]:
             metrics[key] = None
 
     # ── Cash flow metrics ──────────────────────────────────────────────────────
@@ -354,7 +365,8 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
             columns=["period_end", "period_type", "current_assets", "current_liabilities",
                      "long_term_debt", "stockholders_equity", "total_assets",
                      "cash", "accounts_payable", "inventory", "accounts_receivable",
-                     "goodwill", "intangible_assets", "short_term_debt", "total_liabilities"],
+                     "goodwill", "intangible_assets", "short_term_debt", "total_liabilities",
+                     "ppe_net"],
         )
 
         latest_bs = bs_df.iloc[0]
@@ -374,10 +386,17 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
         short_term_debt = latest_bs["short_term_debt"]
         total_liabilities = latest_bs["total_liabilities"]
 
+        ppe_net = latest_bs["ppe_net"]
+
         prior_total_assets = prior_bs["total_assets"] if prior_bs is not None else None
         prior_accounts_payable = prior_bs["accounts_payable"] if prior_bs is not None else None
         prior_inventory = prior_bs["inventory"] if prior_bs is not None else None
         prior_accounts_receivable = prior_bs["accounts_receivable"] if prior_bs is not None else None
+        prior_ppe_net = prior_bs["ppe_net"] if prior_bs is not None else None
+
+        # PPE turnover = revenue / avg(ppe_net)
+        avg_ppe = _avg(ppe_net, prior_ppe_net)
+        metrics["ppe_turnover"] = _safe_divide(ttm_revenue, avg_ppe)
 
         # Profitability / returns
         metrics["roe"] = _safe_divide(ttm_net_income, equity)
@@ -501,7 +520,8 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
                     "net_debt_to_ebitda", "debt_to_ebitda", "interest_coverage",
                     "asset_turnover", "inventory_turnover", "receivables_turnover",
                     "payables_turnover", "dso", "dio", "dpo", "ccc",
-                    "book_value_per_share", "tangible_book_value_per_share", "accrual_ratio"]:
+                    "book_value_per_share", "tangible_book_value_per_share", "accrual_ratio",
+                    "ppe_turnover"]:
             metrics[key] = None
 
     # ── Shareholder returns ────────────────────────────────────────────────────
@@ -572,7 +592,8 @@ def _upsert_derived_metrics(engine: sa.Engine, rows: list[dict]) -> int:
                     dso, dio, dpo, ccc,
                     book_value_per_share, tangible_book_value_per_share,
                     ebitda, ocf_ttm, fcf_ttm,
-                    dividend_yield, dividend_payout_ratio, buyback_yield, shareholder_yield
+                    dividend_yield, dividend_payout_ratio, buyback_yield, shareholder_yield,
+                    sga_margin, rd_margin, ppe_turnover
                 ) VALUES (
                     :ticker, :date,
                     :revenue_yoy_growth, :net_income_yoy_growth, :eps_yoy_growth,
@@ -592,7 +613,8 @@ def _upsert_derived_metrics(engine: sa.Engine, rows: list[dict]) -> int:
                     :dso, :dio, :dpo, :ccc,
                     :book_value_per_share, :tangible_book_value_per_share,
                     :ebitda, :ocf_ttm, :fcf_ttm,
-                    :dividend_yield, :dividend_payout_ratio, :buyback_yield, :shareholder_yield
+                    :dividend_yield, :dividend_payout_ratio, :buyback_yield, :shareholder_yield,
+                    :sga_margin, :rd_margin, :ppe_turnover
                 )
                 """
             ),

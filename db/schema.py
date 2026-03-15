@@ -91,6 +91,14 @@ income_statements_table = sa.Table(
     sa.Column("shares_basic", sa.Float),
     sa.Column("shares_diluted", sa.Float),
     sa.Column("interest_expense", sa.Float),
+    # Phase XBRL normalization additions
+    sa.Column("sga", sa.Float),
+    sa.Column("rd_expense", sa.Float),
+    sa.Column("operating_expenses", sa.Float),
+    sa.Column("interest_income", sa.Float),
+    sa.Column("other_income_expense", sa.Float),
+    sa.Column("ebit", sa.Float),
+    sa.Column("net_income_attributable", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "period_end", "period_type"),
 )
 
@@ -115,6 +123,23 @@ balance_sheets_table = sa.Table(
     sa.Column("short_term_debt", sa.Float),
     sa.Column("goodwill", sa.Float),
     sa.Column("intangible_assets", sa.Float),
+    # Phase XBRL normalization additions
+    sa.Column("ppe_net", sa.Float),
+    sa.Column("short_term_investments", sa.Float),
+    sa.Column("long_term_investments", sa.Float),
+    sa.Column("operating_lease_rou", sa.Float),
+    sa.Column("finance_lease_rou", sa.Float),
+    sa.Column("deferred_revenue", sa.Float),
+    sa.Column("accrued_liabilities", sa.Float),
+    sa.Column("deferred_tax_assets", sa.Float),
+    sa.Column("deferred_tax_liabilities", sa.Float),
+    sa.Column("operating_lease_liability", sa.Float),
+    sa.Column("finance_lease_liability", sa.Float),
+    sa.Column("noncontrolling_interest", sa.Float),
+    sa.Column("treasury_stock", sa.Float),
+    sa.Column("additional_paid_in_capital", sa.Float),
+    sa.Column("other_current_assets", sa.Float),
+    sa.Column("other_noncurrent_assets", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "period_end", "period_type"),
 )
 
@@ -133,7 +158,30 @@ cash_flows_table = sa.Table(
     sa.Column("stock_repurchases", sa.Float),
     sa.Column("free_cash_flow", sa.Float),
     sa.Column("depreciation_amortization", sa.Float),
+    # Phase XBRL normalization additions
+    sa.Column("acquisitions", sa.Float),
+    sa.Column("debt_repayment", sa.Float),
+    sa.Column("debt_issuance", sa.Float),
+    sa.Column("stock_issuance", sa.Float),
+    sa.Column("asset_sale_proceeds", sa.Float),
+    sa.Column("interest_paid", sa.Float),
+    sa.Column("taxes_paid", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "period_end", "period_type"),
+)
+
+financial_quality_scores_table = sa.Table(
+    "financial_quality_scores",
+    metadata,
+    sa.Column("ticker", sa.Text, sa.ForeignKey("tickers.ticker"), nullable=False),
+    sa.Column("period_end", sa.Date, nullable=False),
+    sa.Column("period_type", sa.Text, nullable=False),
+    sa.Column("statement_type", sa.Text, nullable=False),  # 'income', 'balance', 'cashflow'
+    sa.Column("tag_coverage_score", sa.Float),
+    sa.Column("derivation_score", sa.Float),
+    sa.Column("context_confidence", sa.Float),
+    sa.Column("calc_consistency", sa.Float),
+    sa.Column("overall_score", sa.Float),
+    sa.PrimaryKeyConstraint("ticker", "period_end", "period_type", "statement_type"),
 )
 
 earnings_surprises_table = sa.Table(
@@ -472,6 +520,10 @@ derived_metrics_table = sa.Table(
     sa.Column("dividend_payout_ratio", sa.Float),
     sa.Column("buyback_yield", sa.Float),
     sa.Column("shareholder_yield", sa.Float),
+    # XBRL normalization additions
+    sa.Column("sga_margin", sa.Float),
+    sa.Column("rd_margin", sa.Float),
+    sa.Column("ppe_turnover", sa.Float),
     sa.PrimaryKeyConstraint("ticker", "date"),
 )
 
@@ -493,6 +545,69 @@ agent_messages_table = sa.Table(
     sa.Column("content", sa.Text),
     sa.Column("created_at", sa.DateTime),
     sa.Column("tokens_used", sa.Integer),
+)
+
+# ── Phase 9 — Validation tables ───────────────────────────────────────────────
+
+validation_runs_table = sa.Table(
+    "validation_runs", metadata,
+    sa.Column("run_id", sa.Text, primary_key=True),
+    sa.Column("triggered_at", sa.DateTime, nullable=False),
+    sa.Column("n_tickers", sa.Integer),
+    sa.Column("n_periods", sa.Integer),
+    sa.Column("overall_pass_rate", sa.Float),
+    sa.Column("avg_score", sa.Float),
+    sa.Column("triggered_by", sa.Text),
+    sa.Column("notes", sa.Text),
+)
+
+validation_results_table = sa.Table(
+    "validation_results", metadata,
+    sa.Column("run_id", sa.Text, sa.ForeignKey("validation_runs.run_id"), nullable=False),
+    sa.Column("ticker", sa.Text, nullable=False),
+    sa.Column("period_end", sa.Date, nullable=False),
+    sa.Column("period_type", sa.Text, nullable=False),
+    sa.Column("metric_name", sa.Text, nullable=False),
+    sa.Column("pipeline_value", sa.Float),
+    sa.Column("fmp_value", sa.Float),
+    sa.Column("edgar_value", sa.Float),
+    sa.Column("pct_diff_fmp", sa.Float),
+    sa.Column("pct_diff_edgar", sa.Float),
+    sa.Column("tolerance", sa.Float),
+    sa.Column("passed", sa.Integer),
+    sa.Column("mismatch_type", sa.Text),
+    sa.PrimaryKeyConstraint("run_id", "ticker", "period_end", "period_type", "metric_name"),
+)
+
+validation_identity_checks_table = sa.Table(
+    "validation_identity_checks", metadata,
+    sa.Column("run_id", sa.Text, sa.ForeignKey("validation_runs.run_id"), nullable=False),
+    sa.Column("ticker", sa.Text, nullable=False),
+    sa.Column("period_end", sa.Date, nullable=False),
+    sa.Column("period_type", sa.Text, nullable=False),
+    sa.Column("identity_name", sa.Text, nullable=False),
+    sa.Column("lhs_value", sa.Float),
+    sa.Column("rhs_value", sa.Float),
+    sa.Column("diff_pct", sa.Float),
+    sa.Column("passed", sa.Integer),
+    sa.PrimaryKeyConstraint("run_id", "ticker", "period_end", "period_type", "identity_name"),
+)
+
+validation_scores_table = sa.Table(
+    "validation_scores", metadata,
+    sa.Column("run_id", sa.Text, sa.ForeignKey("validation_runs.run_id"), nullable=False),
+    sa.Column("ticker", sa.Text, nullable=False),
+    sa.Column("period_end", sa.Date, nullable=False),
+    sa.Column("period_type", sa.Text, nullable=False),
+    sa.Column("metric_accuracy_score", sa.Float),
+    sa.Column("identity_score", sa.Float),
+    sa.Column("vendor_agreement_score", sa.Float),
+    sa.Column("overall_score", sa.Float),
+    sa.Column("n_metrics_evaluated", sa.Integer),
+    sa.Column("n_metrics_passed", sa.Integer),
+    sa.Column("n_identities_evaluated", sa.Integer),
+    sa.Column("n_identities_passed", sa.Integer),
+    sa.PrimaryKeyConstraint("run_id", "ticker", "period_end", "period_type"),
 )
 
 
@@ -543,8 +658,26 @@ def run_migrations(engine: sa.Engine) -> None:
                 conn.execute(sa.text(f"ALTER TABLE income_statements ADD COLUMN {col} REAL"))
                 conn.commit()
 
+        # income_statements: XBRL normalization expansion
+        for col in ["sga", "rd_expense", "operating_expenses", "interest_income",
+                    "other_income_expense", "ebit", "net_income_attributable"]:
+            if _sqlite_table_exists(conn, "income_statements") and not _sqlite_column_exists(conn, "income_statements", col):
+                conn.execute(sa.text(f"ALTER TABLE income_statements ADD COLUMN {col} REAL"))
+                conn.commit()
+
         # balance_sheets: metrics expansion
         for col in ["inventory", "accounts_receivable", "short_term_debt", "goodwill", "intangible_assets"]:
+            if _sqlite_table_exists(conn, "balance_sheets") and not _sqlite_column_exists(conn, "balance_sheets", col):
+                conn.execute(sa.text(f"ALTER TABLE balance_sheets ADD COLUMN {col} REAL"))
+                conn.commit()
+
+        # balance_sheets: XBRL normalization expansion
+        for col in ["ppe_net", "short_term_investments", "long_term_investments",
+                    "operating_lease_rou", "finance_lease_rou", "deferred_revenue",
+                    "accrued_liabilities", "deferred_tax_assets", "deferred_tax_liabilities",
+                    "operating_lease_liability", "finance_lease_liability",
+                    "noncontrolling_interest", "treasury_stock", "additional_paid_in_capital",
+                    "other_current_assets", "other_noncurrent_assets"]:
             if _sqlite_table_exists(conn, "balance_sheets") and not _sqlite_column_exists(conn, "balance_sheets", col):
                 conn.execute(sa.text(f"ALTER TABLE balance_sheets ADD COLUMN {col} REAL"))
                 conn.commit()
@@ -554,6 +687,33 @@ def run_migrations(engine: sa.Engine) -> None:
             if _sqlite_table_exists(conn, "cash_flows") and not _sqlite_column_exists(conn, "cash_flows", col):
                 conn.execute(sa.text(f"ALTER TABLE cash_flows ADD COLUMN {col} REAL"))
                 conn.commit()
+
+        # cash_flows: XBRL normalization expansion
+        for col in ["acquisitions", "debt_repayment", "debt_issuance", "stock_issuance",
+                    "asset_sale_proceeds", "interest_paid", "taxes_paid"]:
+            if _sqlite_table_exists(conn, "cash_flows") and not _sqlite_column_exists(conn, "cash_flows", col):
+                conn.execute(sa.text(f"ALTER TABLE cash_flows ADD COLUMN {col} REAL"))
+                conn.commit()
+
+        # financial_quality_scores table: create if missing
+        if not _sqlite_table_exists(conn, "financial_quality_scores"):
+            conn.execute(sa.text(
+                """
+                CREATE TABLE IF NOT EXISTS financial_quality_scores (
+                    ticker TEXT NOT NULL,
+                    period_end DATE NOT NULL,
+                    period_type TEXT NOT NULL,
+                    statement_type TEXT NOT NULL,
+                    tag_coverage_score REAL,
+                    derivation_score REAL,
+                    context_confidence REAL,
+                    calc_consistency REAL,
+                    overall_score REAL,
+                    PRIMARY KEY (ticker, period_end, period_type, statement_type)
+                )
+                """
+            ))
+            conn.commit()
 
         # valuation_snapshots: metrics expansion
         for col in ["ev_ebit", "ev_revenue", "p_fcf"]:
@@ -574,6 +734,7 @@ def run_migrations(engine: sa.Engine) -> None:
             "dso", "dio", "dpo", "ccc", "book_value_per_share", "tangible_book_value_per_share",
             "ebitda", "ocf_ttm", "fcf_ttm", "dividend_yield", "dividend_payout_ratio",
             "buyback_yield", "shareholder_yield",
+            "sga_margin", "rd_margin", "ppe_turnover",
         ]
         for col in _new_derived_cols:
             if _sqlite_table_exists(conn, "derived_metrics") and not _sqlite_column_exists(conn, "derived_metrics", col):
@@ -589,6 +750,83 @@ def run_migrations(engine: sa.Engine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_es_ticker ON earnings_surprises(ticker)",
             "CREATE INDEX IF NOT EXISTS idx_na_pub_at ON news_articles(published_at)",
             "CREATE INDEX IF NOT EXISTS idx_at_ticker ON article_tickers(ticker)",
+        ]:
+            conn.execute(sa.text(idx_sql))
+        conn.commit()
+
+        # validation tables: create if missing
+        for tbl_name, create_sql in [
+            ("validation_runs", """
+                CREATE TABLE IF NOT EXISTS validation_runs (
+                    run_id TEXT PRIMARY KEY,
+                    triggered_at DATETIME NOT NULL,
+                    n_tickers INTEGER,
+                    n_periods INTEGER,
+                    overall_pass_rate REAL,
+                    avg_score REAL,
+                    triggered_by TEXT,
+                    notes TEXT
+                )
+            """),
+            ("validation_results", """
+                CREATE TABLE IF NOT EXISTS validation_results (
+                    run_id TEXT NOT NULL REFERENCES validation_runs(run_id),
+                    ticker TEXT NOT NULL,
+                    period_end DATE NOT NULL,
+                    period_type TEXT NOT NULL,
+                    metric_name TEXT NOT NULL,
+                    pipeline_value REAL,
+                    fmp_value REAL,
+                    edgar_value REAL,
+                    pct_diff_fmp REAL,
+                    pct_diff_edgar REAL,
+                    tolerance REAL,
+                    passed INTEGER,
+                    mismatch_type TEXT,
+                    PRIMARY KEY (run_id, ticker, period_end, period_type, metric_name)
+                )
+            """),
+            ("validation_identity_checks", """
+                CREATE TABLE IF NOT EXISTS validation_identity_checks (
+                    run_id TEXT NOT NULL REFERENCES validation_runs(run_id),
+                    ticker TEXT NOT NULL,
+                    period_end DATE NOT NULL,
+                    period_type TEXT NOT NULL,
+                    identity_name TEXT NOT NULL,
+                    lhs_value REAL,
+                    rhs_value REAL,
+                    diff_pct REAL,
+                    passed INTEGER,
+                    PRIMARY KEY (run_id, ticker, period_end, period_type, identity_name)
+                )
+            """),
+            ("validation_scores", """
+                CREATE TABLE IF NOT EXISTS validation_scores (
+                    run_id TEXT NOT NULL REFERENCES validation_runs(run_id),
+                    ticker TEXT NOT NULL,
+                    period_end DATE NOT NULL,
+                    period_type TEXT NOT NULL,
+                    metric_accuracy_score REAL,
+                    identity_score REAL,
+                    vendor_agreement_score REAL,
+                    overall_score REAL,
+                    n_metrics_evaluated INTEGER,
+                    n_metrics_passed INTEGER,
+                    n_identities_evaluated INTEGER,
+                    n_identities_passed INTEGER,
+                    PRIMARY KEY (run_id, ticker, period_end, period_type)
+                )
+            """),
+        ]:
+            if not _sqlite_table_exists(conn, tbl_name):
+                conn.execute(sa.text(create_sql))
+                conn.commit()
+
+        # validation indexes
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_vr_ticker ON validation_results(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_vs_ticker ON validation_scores(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_vr_run ON validation_results(run_id)",
         ]:
             conn.execute(sa.text(idx_sql))
         conn.commit()

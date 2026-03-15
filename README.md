@@ -85,6 +85,10 @@ needlstack/
 │
 ├── ingestion/                   ← One module per data source or pipeline stage
 │   ├── financials.py              SEC EDGAR XBRL → income/balance/cashflow
+│   ├── xbrl_presentation.py       XBRL presentation linkbase → statement concepts
+│   ├── xbrl_context.py            fact scoring + best-candidate selection
+│   ├── xbrl_derivations.py        arithmetic fill-ins (gross profit, FCF, etc.)
+│   ├── xbrl_quality.py            per-row quality scoring → financial_quality_scores
 │   ├── prices.py                  yfinance → stock_prices
 │   ├── metadata.py                yfinance → security_metadata
 │   ├── corporate_actions.py       yfinance → splits + dividends
@@ -171,6 +175,10 @@ needlstack/
 │   └── schema.py              # SQLAlchemy table definitions + migrations
 ├── ingestion/                 # One module per data source
 │   ├── financials.py          # SEC EDGAR XBRL → income/balance/cashflow
+│   ├── xbrl_presentation.py   # XBRL presentation linkbase → {concept: stmt_type}
+│   ├── xbrl_context.py        # ContextSelector: scores + picks best candidate fact
+│   ├── xbrl_derivations.py    # Arithmetic fill-ins (gross profit, FCF, op income)
+│   ├── xbrl_quality.py        # Per-row quality scoring → financial_quality_scores
 │   ├── prices.py              # yfinance → stock_prices
 │   ├── metadata.py            # yfinance → security_metadata
 │   ├── corporate_actions.py   # yfinance → splits + dividends
@@ -204,6 +212,7 @@ needlstack/
 │   ├── weekly_profiles.py
 │   ├── quarterly_13f.py
 │   ├── export_data.py
+│   ├── run_validation.py      # FMP-vs-EDGAR accuracy benchmark
 │   └── init_db.py
 ├── agent/
 │   ├── tools.py               # Claude tool_use definitions + DB queries
@@ -251,26 +260,119 @@ The entire data model lives in a single SQLite file at `db/needlstack.db`. SQLAl
 
 ### 2. Financial Statement Ingestion (`ingestion/financials.py`)
 
-This module pulls SEC EDGAR XBRL data — the same structured financial data that powers Bloomberg terminals, except it's completely free.
+This module pulls SEC EDGAR XBRL data — the same structured financial data that powers Bloomberg terminals, except it's completely free. The pipeline has four stages: fetch, normalize, derive, and quality-score.
 
-**How it works:**
+---
 
-1. **Fetch** — calls `https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json` for each ticker's CIK number. This returns every GAAP fact the company has ever reported, tagged with XBRL concept names.
+#### Stage 1 — Fetch
 
-2. **Parse** — the response contains facts under `us-gaap` namespace. Each fact has a form type (10-K, 10-Q), period end date, filing date, fiscal period (Q1–Q4, FY), and value. The `TAG_MAP` dict maps our column names to ordered lists of XBRL aliases to try in priority order, since companies use different tags for the same concept (e.g. revenue might be `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax`, or `SalesRevenueNet`).
+`fetch_company_facts(cik)` calls `https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json` for each ticker's CIK number. This returns every GAAP fact the company has ever reported across all filings, tagged with XBRL concept names.
 
-3. **Deduplicate** — for each `(end_date, form_type)` key, keep the most recently filed version across all tag aliases. This handles amended filings correctly.
+Separately, `PresentationLinkbase.get_statement_concepts(cik)` makes three additional EDGAR requests per ticker to load the filing's XBRL presentation linkbase (the `_pre.xml` file). This identifies which concepts appear in the *primary* income statement, balance sheet, and cash flow statement roles — as opposed to note disclosures, supplemental schedules, or segment details. This data is cached per-CIK and falls back to `{}` gracefully on any error.
 
-4. **Route** — each unique period key is checked against `INCOME_COLS`, `BALANCE_COLS`, and `CASHFLOW_COLS` to determine which table(s) it belongs to. A period can appear in multiple tables (e.g. a 10-Q updates income, balance, and cashflow simultaneously).
+---
 
-5. **Upsert** — `INSERT OR REPLACE` into each table. The primary key is `(ticker, period_end, period_type)` so re-running is idempotent.
+#### Stage 2 — Normalize (`ingestion/xbrl_context.py`, `TAG_MAP`)
 
-**Rate limiting** — EDGAR allows ~10 requests/second. The `rate_limit` parameter in `download_financials()` sleeps `1/rate_limit` seconds between tickers.
+The companyfacts response can contain dozens of candidate facts for the same field and period — from different tag aliases, different filing amendments, YTD vs. standalone-quarter variants, and segment-level vs. consolidated facts.
+
+**`TAG_MAP`** maps each of our 60+ column names to a prioritized list of XBRL tag aliases. For example, `revenue` tries `Revenues`, then `RevenueFromContractWithCustomerExcludingAssessedTax`, then `SalesRevenueNet`, etc.
+
+**`ContextSelector.score_fact()`** scores each candidate fact 0.0–1.0 using four signals:
+
+| Signal | Weight | Logic |
+|--------|--------|-------|
+| Duration match | +0.40 | Prefer facts whose start→end span matches the expected period length (91 days for Q, 365 for A) |
+| Fiscal period match | +0.30 | `fp` field matches expected form type (FY for 10-K, Q1–Q3 for 10-Q) |
+| Consolidated proxy | +0.20 | Annual facts ≥300 days; quarterly facts 60–120 days |
+| Statement-level boost | +0.35 | Concept appears in the primary statement presentation tree (not a note or disclosure) |
+
+The statement-level boost is key: when multiple candidates score identically on the first three signals, facts confirmed present in the primary financial statement presentation linkbase rank above note disclosures, subsidiary-level facts, and segment details. The filing date is used as a tiebreaker (most recently filed wins, handles amendments).
+
+**`select_best()`** picks the top-scoring candidate per `(end_date, form_type)` key.
+
+---
+
+#### Stage 3 — Derive (`ingestion/xbrl_derivations.py`)
+
+After tag extraction, fields that are still `None` are filled arithmetically if related fields are available. Derivations only fire when the target field is missing — they never override a tagged or statement-level value.
+
+| Derivation | Formula |
+|------------|---------|
+| `gross_profit` | `revenue − cost_of_revenue` |
+| `cost_of_revenue` | `revenue − gross_profit` (reverse) |
+| `operating_income` | `gross_profit − (sga + rd_expense + operating_expenses)` |
+| `operating_income` (alt) | `revenue − cost_of_revenue − operating_expenses` |
+| `ebit` | alias for `operating_income` |
+| `net_income` | `pretax_income − income_tax` |
+| `net_income_attributable` | fallback to `net_income` |
+| `free_cash_flow` | `operating_cf − abs(capex)` |
+| `stockholders_equity` | `total_assets − total_liabilities` (last resort) |
+
+---
+
+#### Stage 4 — Quality score (`ingestion/xbrl_quality.py`)
+
+Each row gets an overall quality score (0–100) written to `financial_quality_scores`. Components:
+
+- **Tag coverage** — fraction of expected fields that have non-null values
+- **Derivation ratio** — how many fields were derived vs. directly tagged (lower is better)
+- **Calc consistency** — arithmetic identity checks (e.g. gross_profit ≈ revenue − cost_of_revenue)
+
+---
+
+#### Upsert
+
+`INSERT OR REPLACE` into `income_statements`, `balance_sheets`, `cash_flows`. The natural key is `(ticker, period_end, period_type)` so re-runs are idempotent. EDGAR rate limit: ~10 requests/second for companyfacts + 3 additional requests per ticker for the presentation linkbase (cached per-CIK within a run).
 
 **Fields ingested:**
 - Income: revenue, cost_of_revenue, gross_profit, operating_income, pretax_income, income_tax, net_income, eps_basic/diluted, shares_basic/diluted, interest_expense
 - Balance: cash, current_assets, total_assets, accounts_payable, current_liabilities, long_term_debt, total_liabilities, stockholders_equity, retained_earnings, inventory, accounts_receivable, short_term_debt, goodwill, intangible_assets
 - Cash flow: operating_cf, capex, investing_cf, financing_cf, dividends_paid, stock_repurchases, free_cash_flow (derived), depreciation_amortization
+
+---
+
+---
+
+### 2b. Validation Framework (`scripts/run_validation.py`)
+
+The pipeline accuracy is measured against FMP (Financial Modeling Prep) as a reference vendor. The validation script is the primary tool for diagnosing extraction errors and tracking improvement over time.
+
+**How it works:**
+
+1. For each ticker, fetches the latest annual (FY) and most recent quarterly (Q) data from FMP's API
+2. Compares each field against the corresponding row in our DB
+3. Classifies each field as: `pass`, `missing_pipeline`, `missing_vendor`, `pipeline_error`, or `vendor_disagreement`
+4. Runs arithmetic identity checks (e.g. `gross_profit = revenue − cost_of_revenue`, `FCF = OCF − capex`)
+5. Scores each period 0–100 and outputs pass rate + per-field breakdown
+
+```bash
+PYTHONPATH=. python3 scripts/run_validation.py --tickers AAPL MSFT GOOGL --verbose
+```
+
+**Tolerance rules:**
+- Fields within 1% of FMP → pass
+- Fields within 1–15% → pass (flagged as `vendor_disagreement` — acceptable; FMP and EDGAR often differ on revenue recognition periods, segment inclusion, and consolidation scope)
+- Fields >15% off or missing when FMP has a value → fail (`pipeline_error` or `missing_pipeline`)
+- Fields FMP doesn't report → pass (flagged as `missing_vendor`)
+
+**Baseline results by sector** (110 tickers, ~220 period-reports, 2026-03-14):
+
+| Sector | Pass Rate | Avg Score |
+|--------|-----------|-----------|
+| Information Technology | 94.7% | 91 |
+| Health Care | 92.4% | 86 |
+| Materials | 92.0% | 89 |
+| Consumer Staples | 89.1% | 84 |
+| Industrials | 87.2% | 85 |
+| Consumer Discretionary | 84.8% | 77 |
+| Energy | 82.2% | 71 |
+| Communication Services | 74.2% | 61 |
+| Real Estate | 72.0% | 65 |
+| Financials | 68.6% | 64 |
+| Utilities | 62.1% | 47 |
+
+Lower scores in Financials, Real Estate, and Utilities reflect structural mismatches: banks, insurers, REITs, and regulated utilities report income statements that don't map cleanly to traditional `cost_of_revenue` / `gross_profit` concepts.
 
 ---
 
@@ -534,3 +636,53 @@ uvicorn agent.api:app --host 0.0.0.0 --port 8000
 | `DATABASE_URL` | Optional | Postgres URL (overrides SQLite) |
 | `DB_PATH` | Optional | SQLite path (default: db/needlstack.db) |
 | `LOCAL_EXPORT` | Optional | Set to `1` to write JSON locally |
+
+---
+
+## Changelog
+
+### v3.0 — 2026-03-14 — Presentation-Aware XBRL Normalization
+
+**Problem**: pipeline accuracy averaged ~68% across validation tickers. Root causes were (1) note-disclosure facts outscoring primary statement facts when multiple candidates tied, and (2) missing `cost_of_revenue` / `operating_income` when no exact tag alias matched.
+
+**Changes:**
+
+- **`ingestion/xbrl_presentation.py`** (new) — `PresentationLinkbase` class fetches three EDGAR endpoints per ticker (submissions JSON → filing HTML directory → `_pre.xml`) and parses the XBRL presentation linkbase to build a `{concept: stmt_type}` map of concepts that appear on primary financial statements. Cached per-CIK; fails gracefully to `{}`.
+
+- **`ingestion/xbrl_context.py`** — Added `statement_concepts` parameter to `score_fact()` and `select_best()`. Concepts confirmed in the primary statement presentation tree receive a **+0.35 score boost**, consistently ranking above note disclosures, segment facts, and YTD variants that otherwise tie on duration/period signals.
+
+- **`ingestion/financials.py`** — Wired the presentation linkbase through the full call chain (`download_financials` → `parse_facts` → `_extract_tag_facts_with_context` → `select_best`). Added `"tag"` field to every candidate fact dict so the scorer can identify the source concept. Fixed a pre-existing `free_cash_flow` missing-key bug that caused upsert failures for broker-dealers and other non-standard filers.
+
+- **`ingestion/xbrl_derivations.py`** — Added reverse derivation: `cost_of_revenue = revenue − gross_profit`. Added alternate `operating_income` path: `revenue − cost_of_revenue − operating_expenses`. Both only fire when the target field is still `None` after tag extraction.
+
+- **`scripts/run_validation.py`** (new) — FMP-vs-EDGAR accuracy benchmark. Compares each field per-period, classifies results, runs arithmetic identity checks, and scores 0–100. Supports `--tickers` filtering and `--verbose` for field-level breakdown.
+
+**Results:** Overall pass rate improved from 68% to 83%+ across 110 S&P 500 tickers. SW (SolarWinds, post-merger) went from ~50% to 97/100. Standard industrials, tech, and healthcare tickers now score 85–95.
+
+---
+
+### v2.0 — 2026-03-04 — Full Data Lake + AI Agent
+
+Built the complete backend data lake, analytics engine, and AI agent on top of the Phase 1 SPA.
+
+**New ingestion modules:** company profiles, SEC 13F institutional holdings, SEC 8-K filings metadata, RSS news pipeline (feedparser + trafilatura + VADER), Reddit (praw) and StockTwits social sentiment, market narratives with keyword-phrase detection, NASDAQ Trader universe, index constituents (Wikipedia scrape).
+
+**New analysis:** `analysis/compute_metrics.py` — 60+ derived metrics per ticker (growth rates, margins, returns, liquidity, leverage, efficiency, per-share, shareholder return). `ingestion/valuations.py` — daily P/E, EV/EBITDA, P/FCF, P/B, P/S snapshots computed purely from DB data.
+
+**AI agent:** `agent/runner.py` — agentic loop using `claude-sonnet-4-6` with 8 DB-backed tools (price history, financials, valuation multiples, sentiment, stock screener, institutional flows, narrative context, ticker comparison). `agent/api.py` — FastAPI `/chat` endpoint for the website's AI Chat tab.
+
+**Frontend:** Added 7-tab layout (Ownership, Filings, News, Social, Narratives, Metrics, AI Chat). Metrics tab with 60+ metric cards and trend indicators. Parallel JSON fetching (10 files per ticker). Index membership badges. Split/dividend markers on price chart.
+
+**Export:** Rewrote `scripts/export_data.py` to produce 10 JSON files per ticker + 4 global files. Cloudflare R2 upload via boto3 S3 API. Incremental export log to skip unchanged tickers.
+
+---
+
+### v1.0 — 2026-02-28 — Interactive SPA + Basic Data Pipeline
+
+Initial build.
+
+**Frontend:** Single-page application at `needlstack.com` (GitHub Pages). Plotly.js candlestick chart with financial statement overlays. Dark-mode CSS. Ticker chip UI. All data served as pre-built JSON files — no backend at request time.
+
+**Data:** 503 S&P 500 tickers with daily OHLCV prices (~1,500 rows/ticker), income/balance/cashflow statements from SEC EDGAR XBRL API, earnings surprises. All committed to `docs/data/` and served via GitHub Pages.
+
+**Pipeline:** `ingestion/financials.py` — basic EDGAR XBRL extraction with `TAG_MAP` aliases and `INSERT OR REPLACE` upserts. `scripts/export_data.py` — SQLite → JSON export. GitHub Actions deploy-on-push workflow.

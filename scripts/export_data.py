@@ -108,7 +108,11 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
         inc_rows = conn.execute(
             sa.text(
                 "SELECT period_end, period_type, fiscal_year, fiscal_quarter, "
-                "revenue, gross_profit, operating_income, net_income, eps_diluted "
+                "revenue, cost_of_revenue, gross_profit, sga, rd_expense, "
+                "operating_expenses, operating_income, interest_income, interest_expense, "
+                "other_income_expense, pretax_income, income_tax, net_income, "
+                "net_income_attributable, ebit, eps_basic, eps_diluted, "
+                "shares_basic, shares_diluted "
                 "FROM income_statements WHERE ticker = :ticker ORDER BY period_end"
             ),
             {"ticker": ticker},
@@ -120,10 +124,24 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
                 "fiscal_year": r[2],
                 "fiscal_quarter": r[3],
                 "revenue": r[4],
-                "gross_profit": r[5],
-                "operating_income": r[6],
-                "net_income": r[7],
-                "eps_diluted": r[8],
+                "cost_of_revenue": r[5],
+                "gross_profit": r[6],
+                "sga": r[7],
+                "rd_expense": r[8],
+                "operating_expenses": r[9],
+                "operating_income": r[10],
+                "interest_income": r[11],
+                "interest_expense": r[12],
+                "other_income_expense": r[13],
+                "pretax_income": r[14],
+                "income_tax": r[15],
+                "net_income": r[16],
+                "net_income_attributable": r[17],
+                "ebit": r[18],
+                "eps_basic": r[19],
+                "eps_diluted": r[20],
+                "shares_basic": r[21],
+                "shares_diluted": r[22],
             }
             for r in inc_rows
         ]
@@ -134,8 +152,16 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
     try:
         bs_rows = conn.execute(
             sa.text(
-                "SELECT period_end, period_type, cash, total_assets, "
-                "long_term_debt, total_liabilities, stockholders_equity "
+                "SELECT period_end, period_type, cash, short_term_investments, "
+                "long_term_investments, accounts_receivable, inventory, "
+                "other_current_assets, current_assets, ppe_net, "
+                "operating_lease_rou, goodwill, intangible_assets, "
+                "deferred_tax_assets, other_noncurrent_assets, total_assets, "
+                "accounts_payable, accrued_liabilities, deferred_revenue, "
+                "short_term_debt, operating_lease_liability, current_liabilities, "
+                "long_term_debt, deferred_tax_liabilities, total_liabilities, "
+                "additional_paid_in_capital, retained_earnings, treasury_stock, "
+                "noncontrolling_interest, stockholders_equity "
                 "FROM balance_sheets WHERE ticker = :ticker ORDER BY period_end"
             ),
             {"ticker": ticker},
@@ -145,10 +171,33 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
                 "period_end": str(r[0]),
                 "period_type": r[1],
                 "cash": r[2],
-                "total_assets": r[3],
-                "long_term_debt": r[4],
-                "total_liabilities": r[5],
-                "stockholders_equity": r[6],
+                "short_term_investments": r[3],
+                "long_term_investments": r[4],
+                "accounts_receivable": r[5],
+                "inventory": r[6],
+                "other_current_assets": r[7],
+                "current_assets": r[8],
+                "ppe_net": r[9],
+                "operating_lease_rou": r[10],
+                "goodwill": r[11],
+                "intangible_assets": r[12],
+                "deferred_tax_assets": r[13],
+                "other_noncurrent_assets": r[14],
+                "total_assets": r[15],
+                "accounts_payable": r[16],
+                "accrued_liabilities": r[17],
+                "deferred_revenue": r[18],
+                "short_term_debt": r[19],
+                "operating_lease_liability": r[20],
+                "current_liabilities": r[21],
+                "long_term_debt": r[22],
+                "deferred_tax_liabilities": r[23],
+                "total_liabilities": r[24],
+                "additional_paid_in_capital": r[25],
+                "retained_earnings": r[26],
+                "treasury_stock": r[27],
+                "noncontrolling_interest": r[28],
+                "stockholders_equity": r[29],
             }
             for r in bs_rows
         ]
@@ -159,8 +208,11 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
     try:
         cf_rows = conn.execute(
             sa.text(
-                "SELECT period_end, period_type, operating_cf, capex, "
-                "dividends_paid, free_cash_flow "
+                "SELECT period_end, period_type, operating_cf, depreciation_amortization, "
+                "capex, acquisitions, asset_sale_proceeds, investing_cf, "
+                "debt_repayment, debt_issuance, stock_issuance, "
+                "dividends_paid, stock_repurchases, financing_cf, free_cash_flow, "
+                "interest_paid, taxes_paid "
                 "FROM cash_flows WHERE ticker = :ticker ORDER BY period_end"
             ),
             {"ticker": ticker},
@@ -170,9 +222,20 @@ def export_financials_v2(conn: sa.Connection, ticker: str) -> str:
                 "period_end": str(r[0]),
                 "period_type": r[1],
                 "operating_cf": r[2],
-                "capex": r[3],
-                "dividends_paid": r[4],
-                "free_cash_flow": r[5],
+                "depreciation_amortization": r[3],
+                "capex": r[4],
+                "acquisitions": r[5],
+                "asset_sale_proceeds": r[6],
+                "investing_cf": r[7],
+                "debt_repayment": r[8],
+                "debt_issuance": r[9],
+                "stock_issuance": r[10],
+                "dividends_paid": r[11],
+                "stock_repurchases": r[12],
+                "financing_cf": r[13],
+                "free_cash_flow": r[14],
+                "interest_paid": r[15],
+                "taxes_paid": r[16],
             }
             for r in cf_rows
         ]
