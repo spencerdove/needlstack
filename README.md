@@ -104,7 +104,10 @@ needlstack/
 │   ├── stocktwits.py              public API → content_items
 │   ├── narratives.py              keyword scan → narrative_signals
 │   ├── indexes.py                 Wikipedia → index_constituents
-│   └── universe.py                NASDAQ Trader → tickers
+│   ├── universe.py                NASDAQ Trader → tickers
+│   ├── email.py                   Resend API → changelog email delivery
+│   ├── feedback.py                Store feedback replies → feedback table
+│   └── feedback_classifier.py     Claude classification of feedback
 │
 ├── analysis/                    ← Derived computations (reads DB, writes back)
 │   └── compute_metrics.py         60+ metrics per ticker per day
@@ -124,13 +127,19 @@ needlstack/
 │   ├── weekly_profiles.py         calls ingestion/profiles.py
 │   ├── quarterly_13f.py           calls ingestion/sec_13f.py
 │   ├── export_data.py             reads DB → writes JSON to R2 or docs/data/
-│   └── init_db.py                 calls db/schema.init_db()
+│   ├── init_db.py                 calls db/schema.init_db()
+│   ├── send_changelog.py          Send changelog email: python scripts/send_changelog.py v4.0 [--dry-run]
+│   ├── classify_feedback.py       Classify unclassified feedback with Claude
+│   └── feedback_report.py         Print feedback summary report
+│
+├── changelogs/                  ← One Markdown file per version (read by send_changelog.py)
+│   └── v4.0.md
 │
 ├── agent/                       ← AI agent (reads DB live at request time)
 │   ├── tools.py                   Tool definitions + SQL implementations
 │   ├── runner.py                  Agentic loop (Claude API + tool execution)
 │   ├── cli.py                     CLI entry point
-│   └── api.py                     FastAPI /chat endpoint
+│   └── api.py                     FastAPI /chat + /webhook/email endpoints
 │
 ├── storage/                     ← Infrastructure adapters
 │   └── r2.py                      Cloudflare R2 upload via boto3 S3 API
@@ -194,7 +203,10 @@ needlstack/
 │   ├── stocktwits.py          # public API → content_items (stocktwits)
 │   ├── narratives.py          # keyword-phrase → narrative_signals
 │   ├── indexes.py             # Wikipedia scrape → index_constituents
-│   └── universe.py            # NASDAQ Trader → tickers
+│   ├── universe.py            # NASDAQ Trader → tickers
+│   ├── email.py               # Resend API → changelog emails
+│   ├── feedback.py            # Store feedback to DB
+│   └── feedback_classifier.py # Claude feedback classification
 ├── analysis/
 │   └── compute_metrics.py     # 60+ derived metrics → derived_metrics
 ├── scripts/                   # Runnable entry points (cron targets)
@@ -213,12 +225,17 @@ needlstack/
 │   ├── quarterly_13f.py
 │   ├── export_data.py
 │   ├── run_validation.py      # FMP-vs-EDGAR accuracy benchmark
-│   └── init_db.py
+│   ├── init_db.py
+│   ├── send_changelog.py      # Email changelog to subscribers
+│   ├── classify_feedback.py   # Classify feedback with Claude
+│   └── feedback_report.py     # Feedback summary report
+├── changelogs/                # One MD file per version
+│   └── v4.0.md
 ├── agent/
 │   ├── tools.py               # Claude tool_use definitions + DB queries
 │   ├── runner.py              # Agentic loop (max 10 iterations)
 │   ├── cli.py                 # CLI: python agent/cli.py "question"
-│   └── api.py                 # FastAPI /chat endpoint
+│   └── api.py                 # FastAPI /chat + /webhook/email
 ├── storage/
 │   └── r2.py                  # Cloudflare R2 upload wrapper
 └── docs/                      # GitHub Pages SPA
@@ -636,10 +653,25 @@ uvicorn agent.api:app --host 0.0.0.0 --port 8000
 | `DATABASE_URL` | Optional | Postgres URL (overrides SQLite) |
 | `DB_PATH` | Optional | SQLite path (default: db/needlstack.db) |
 | `LOCAL_EXPORT` | Optional | Set to `1` to write JSON locally |
+| `RESEND_API_KEY` | For email | Resend API key |
+| `RESEND_FROM_EMAIL` | For email | Sender address (default: updates@needlstack.com) |
+| `RESEND_REPLY_TO` | For email | Reply-to address (default: from address) |
 
 ---
 
 ## Changelog
+
+### v4.0 — 2026-03-15 — Bulk Reference Data & Email Notifications
+
+**New data sources:** SEC EDGAR bulk submissions for SIC codes, fiscal year end, entity type, and state of incorporation. OpenFIGI identifier crosswalk (FIGI, security type). Alpha Vantage IPO dates. FMP float, short interest, and event calendars.
+
+**New tables:** `sic_lookup`, `identifier_crosswalk`, `ticker_history`, `event_calendar`, `source_lineage`, `feedback`. Expanded columns on `tickers`, `security_metadata`, and `company_profiles`.
+
+**Email notifications:** Changelog emails via Resend API (`ingestion/email.py`, `scripts/send_changelog.py`). Subscribers receive formatted changelogs with a "what to try" section. Replies are stored in the `feedback` table and classified by Claude (`ingestion/feedback_classifier.py`) as bug, feature request, question, or general feedback.
+
+**New scripts:** `send_changelog.py`, `classify_feedback.py`, `feedback_report.py`, `weekly_fmp_bulk.py`, `weekly_event_calendar.py`, `backfill_bulk_reference.py`.
+
+---
 
 ### v3.0 — 2026-03-14 — Presentation-Aware XBRL Normalization
 

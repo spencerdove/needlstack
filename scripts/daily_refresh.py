@@ -44,7 +44,7 @@ def main() -> None:
     # Resolve active equity tickers (expanded universe if available, else S&P 500)
     try:
         from ingestion.universe import get_active_tickers
-        tickers = get_active_tickers(asset_types=["equity"], engine=engine)
+        tickers = get_active_tickers(asset_types=["equity", "etf"], engine=engine)
         logger.info(f"Using expanded universe: {len(tickers)} equity tickers")
     except Exception:
         from ingestion.tickers import get_sp500_tickers

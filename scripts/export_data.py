@@ -55,7 +55,7 @@ def _save_export_log(log: dict) -> None:
     EXPORT_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")))
 
 
-def _get_latest_price_date(conn: sa.Connection, ticker: str) -> str | None:
+def _get_latest_price_date(conn: sa.Connection, ticker: str):
     row = conn.execute(
         sa.text("SELECT MAX(date) FROM stock_prices WHERE ticker = :ticker"),
         {"ticker": ticker},
@@ -304,7 +304,8 @@ def export_metadata(conn: sa.Connection, ticker: str) -> str:
         row = conn.execute(
             sa.text(
                 "SELECT market_cap, float_shares, shares_outstanding, enterprise_value, "
-                "avg_volume_30d, avg_dollar_vol_30d, updated_at "
+                "avg_volume_30d, avg_dollar_vol_30d, updated_at, "
+                "short_interest, short_ratio, insider_pct, institutional_pct "
                 "FROM security_metadata WHERE ticker = :ticker"
             ),
             {"ticker": ticker},
@@ -318,6 +319,10 @@ def export_metadata(conn: sa.Connection, ticker: str) -> str:
                 "avg_volume_30d": row[4],
                 "avg_dollar_vol_30d": row[5],
                 "updated_at": str(row[6]) if row[6] is not None else None,
+                "short_interest": row[7],
+                "short_ratio": row[8],
+                "insider_pct": row[9],
+                "institutional_pct": row[10],
             }
         else:
             data = {}
@@ -588,7 +593,8 @@ def export_derived_metrics(conn: sa.Connection, ticker: str) -> str:
 def export_tickers_global(conn: sa.Connection) -> tuple[str, list[str]]:
     rows = conn.execute(
         sa.text(
-            "SELECT ticker, company_name, sector, industry, asset_type, exchange "
+            "SELECT ticker, company_name, sector, industry, asset_type, exchange, "
+            "sic_code, security_type, country, ipo_date, fiscal_year_end, entity_type "
             "FROM tickers ORDER BY ticker"
         )
     ).fetchall()
@@ -600,6 +606,12 @@ def export_tickers_global(conn: sa.Connection) -> tuple[str, list[str]]:
             "industry": r[3],
             "asset_type": r[4],
             "exchange": r[5],
+            "sic_code": r[6],
+            "security_type": r[7],
+            "country": r[8],
+            "ipo_date": str(r[9]) if r[9] else None,
+            "fiscal_year_end": r[10],
+            "entity_type": r[11],
         }
         for r in rows
     ]
@@ -776,6 +788,32 @@ def main() -> None:
             for key, data in global_pairs:
                 _write_or_upload(key, data)
             print(f"Exported {len(global_pairs)} global files")
+
+            # Export coverage summary
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    "export_coverage",
+                    Path(__file__).parent / "export_coverage.py",
+                )
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.main()
+            except Exception as exc:
+                print(f"Warning: coverage export failed: {exc}")
+
+            # Export validation data
+            try:
+                import importlib.util as ilu
+                vspec = ilu.spec_from_file_location(
+                    "export_validation",
+                    Path(__file__).parent / "export_validation.py",
+                )
+                vmod = ilu.module_from_spec(vspec)
+                vspec.loader.exec_module(vmod)
+                vmod.main()
+            except Exception as exc:
+                print(f"Warning: validation export failed: {exc}")
 
         tickers_to_export = args.tickers if args.tickers else all_tickers
 

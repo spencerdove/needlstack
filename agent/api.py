@@ -7,19 +7,21 @@ Usage:
 """
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from db.schema import get_engine, init_db
 from agent.runner import run_agent
+from ingestion.feedback import store_feedback
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,37 @@ async def chat_stream(request: ChatRequest):
             yield f"data: {json.dumps({'error': 'Internal server error'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.post("/webhook/email")
+async def webhook_email(request: Request):
+    """
+    Receive inbound email webhooks from Resend.
+    Extracts sender, subject, body and stores as feedback.
+    """
+    try:
+        payload = await request.json()
+        sender_email = payload.get("from", "")
+        sender_name = payload.get("from_name", "")
+        subject = payload.get("subject", "")
+        body = payload.get("text", "") or payload.get("html", "")
+
+        # Try to extract changelog version from subject (e.g. "Re: Needlstack v4.0 — ...")
+        version_match = re.search(r"v\d+\.\d+", subject)
+        changelog_version = version_match.group(0) if version_match else None
+
+        store_feedback(
+            body=body,
+            source="email",
+            sender_email=sender_email,
+            sender_name=sender_name,
+            subject=subject,
+            changelog_version=changelog_version,
+        )
+        return {"status": "ok"}
+    except Exception as exc:
+        logger.error(f"Webhook error: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Webhook processing failed")
 
 
 @app.get("/health")

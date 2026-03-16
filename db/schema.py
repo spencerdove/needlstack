@@ -51,6 +51,18 @@ tickers_table = sa.Table(
     sa.Column("exchange", sa.Text),
     sa.Column("is_active", sa.Integer, server_default="1"),
     sa.Column("first_seen_date", sa.Date),
+    # Bulk reference data additions
+    sa.Column("sic_code", sa.Text),
+    sa.Column("sic_description", sa.Text),
+    sa.Column("security_type", sa.Text),
+    sa.Column("currency", sa.Text),
+    sa.Column("country", sa.Text),
+    sa.Column("ipo_date", sa.Date),
+    sa.Column("delist_date", sa.Date),
+    sa.Column("fiscal_year_end", sa.Text),
+    sa.Column("state_of_incorporation", sa.Text),
+    sa.Column("entity_type", sa.Text),
+    sa.Column("sub_industry", sa.Text),
 )
 
 stock_prices_table = sa.Table(
@@ -208,6 +220,11 @@ security_metadata_table = sa.Table(
     sa.Column("avg_volume_30d", sa.Float),
     sa.Column("avg_dollar_vol_30d", sa.Float),
     sa.Column("updated_at", sa.DateTime),
+    # Bulk reference data additions
+    sa.Column("short_interest", sa.Float),
+    sa.Column("short_ratio", sa.Float),
+    sa.Column("insider_pct", sa.Float),
+    sa.Column("institutional_pct", sa.Float),
 )
 
 corporate_actions_table = sa.Table(
@@ -246,6 +263,11 @@ company_profiles_table = sa.Table(
     sa.Column("city", sa.Text),
     sa.Column("state", sa.Text),
     sa.Column("updated_at", sa.DateTime),
+    # Bulk reference data additions
+    sa.Column("ceo", sa.Text),
+    sa.Column("phone", sa.Text),
+    sa.Column("reporting_currency", sa.Text),
+    sa.Column("accounting_standard", sa.Text),
 )
 
 # ── Phase 4 tables ────────────────────────────────────────────────────────────
@@ -527,6 +549,23 @@ derived_metrics_table = sa.Table(
     sa.PrimaryKeyConstraint("ticker", "date"),
 )
 
+feedback_table = sa.Table(
+    "feedback", metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("source", sa.Text, nullable=False),
+    sa.Column("sender_email", sa.Text),
+    sa.Column("sender_name", sa.Text),
+    sa.Column("subject", sa.Text),
+    sa.Column("body", sa.Text, nullable=False),
+    sa.Column("received_at", sa.DateTime, nullable=False),
+    sa.Column("changelog_version", sa.Text),
+    sa.Column("category", sa.Text),
+    sa.Column("category_confidence", sa.Float),
+    sa.Column("summary", sa.Text),
+    sa.Column("classified_at", sa.DateTime),
+    sa.Column("is_actioned", sa.Integer, server_default="0"),
+)
+
 agent_conversations_table = sa.Table(
     "agent_conversations",
     metadata,
@@ -611,6 +650,73 @@ validation_scores_table = sa.Table(
 )
 
 
+# ── Bulk reference data tables ────────────────────────────────────────────────
+
+sic_lookup_table = sa.Table(
+    "sic_lookup",
+    metadata,
+    sa.Column("sic_code", sa.Text, primary_key=True),
+    sa.Column("sic_description", sa.Text),
+    sa.Column("division", sa.Text),
+    sa.Column("division_name", sa.Text),
+    sa.Column("major_group", sa.Text),
+    sa.Column("major_group_name", sa.Text),
+    sa.Column("sector", sa.Text),
+    sa.Column("industry", sa.Text),
+)
+
+identifier_crosswalk_table = sa.Table(
+    "identifier_crosswalk",
+    metadata,
+    sa.Column("ticker", sa.Text, nullable=False),
+    sa.Column("id_type", sa.Text, nullable=False),
+    sa.Column("id_value", sa.Text, nullable=False),
+    sa.Column("source", sa.Text),
+    sa.Column("valid_from", sa.Date),
+    sa.Column("valid_to", sa.Date),
+    sa.Column("updated_at", sa.DateTime),
+    sa.PrimaryKeyConstraint("ticker", "id_type", "id_value"),
+)
+
+ticker_history_table = sa.Table(
+    "ticker_history",
+    metadata,
+    sa.Column("ticker", sa.Text, nullable=False),
+    sa.Column("event_type", sa.Text, nullable=False),
+    sa.Column("event_date", sa.Date, nullable=False),
+    sa.Column("old_value", sa.Text),
+    sa.Column("new_value", sa.Text),
+    sa.Column("notes", sa.Text),
+    sa.Column("source", sa.Text),
+    sa.PrimaryKeyConstraint("ticker", "event_type", "event_date"),
+)
+
+event_calendar_table = sa.Table(
+    "event_calendar",
+    metadata,
+    sa.Column("ticker", sa.Text, nullable=False),
+    sa.Column("event_type", sa.Text, nullable=False),
+    sa.Column("event_date", sa.Date, nullable=False),
+    sa.Column("confirmed", sa.Integer),
+    sa.Column("details", sa.Text),
+    sa.Column("source", sa.Text),
+    sa.Column("updated_at", sa.DateTime),
+    sa.PrimaryKeyConstraint("ticker", "event_type", "event_date"),
+)
+
+source_lineage_table = sa.Table(
+    "source_lineage",
+    metadata,
+    sa.Column("table_name", sa.Text, nullable=False),
+    sa.Column("ticker", sa.Text, nullable=False),
+    sa.Column("field_name", sa.Text, nullable=False),
+    sa.Column("source", sa.Text, nullable=False),
+    sa.Column("fetched_at", sa.DateTime),
+    sa.Column("confidence", sa.Float),
+    sa.PrimaryKeyConstraint("table_name", "ticker", "field_name"),
+)
+
+
 def _sqlite_column_exists(conn: sa.Connection, table: str, column: str) -> bool:
     rows = conn.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
     return column in {row[1] for row in rows}
@@ -645,6 +751,36 @@ def run_migrations(engine: sa.Engine) -> None:
         ]:
             if _sqlite_table_exists(conn, "tickers") and not _sqlite_column_exists(conn, "tickers", col):
                 conn.execute(sa.text(f"ALTER TABLE tickers ADD COLUMN {col} {defn}"))
+                conn.commit()
+
+        # tickers: Bulk reference data migrations
+        for col, defn in [
+            ("sic_code", "TEXT"),
+            ("sic_description", "TEXT"),
+            ("security_type", "TEXT"),
+            ("currency", "TEXT"),
+            ("country", "TEXT"),
+            ("ipo_date", "DATE"),
+            ("delist_date", "DATE"),
+            ("fiscal_year_end", "TEXT"),
+            ("state_of_incorporation", "TEXT"),
+            ("entity_type", "TEXT"),
+            ("sub_industry", "TEXT"),
+        ]:
+            if _sqlite_table_exists(conn, "tickers") and not _sqlite_column_exists(conn, "tickers", col):
+                conn.execute(sa.text(f"ALTER TABLE tickers ADD COLUMN {col} {defn}"))
+                conn.commit()
+
+        # company_profiles: Bulk reference data migrations
+        for col in ["ceo", "phone", "reporting_currency", "accounting_standard"]:
+            if _sqlite_table_exists(conn, "company_profiles") and not _sqlite_column_exists(conn, "company_profiles", col):
+                conn.execute(sa.text(f"ALTER TABLE company_profiles ADD COLUMN {col} TEXT"))
+                conn.commit()
+
+        # security_metadata: Bulk reference data migrations
+        for col in ["short_interest", "short_ratio", "insider_pct", "institutional_pct"]:
+            if _sqlite_table_exists(conn, "security_metadata") and not _sqlite_column_exists(conn, "security_metadata", col):
+                conn.execute(sa.text(f"ALTER TABLE security_metadata ADD COLUMN {col} REAL"))
                 conn.commit()
 
         # stock_prices: Phase 2 migration
@@ -827,6 +963,42 @@ def run_migrations(engine: sa.Engine) -> None:
             "CREATE INDEX IF NOT EXISTS idx_vr_ticker ON validation_results(ticker)",
             "CREATE INDEX IF NOT EXISTS idx_vs_ticker ON validation_scores(ticker)",
             "CREATE INDEX IF NOT EXISTS idx_vr_run ON validation_results(run_id)",
+        ]:
+            conn.execute(sa.text(idx_sql))
+        conn.commit()
+
+        # feedback table: create if missing
+        if not _sqlite_table_exists(conn, "feedback"):
+            conn.execute(sa.text(
+                """
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    sender_email TEXT,
+                    sender_name TEXT,
+                    subject TEXT,
+                    body TEXT NOT NULL,
+                    received_at DATETIME NOT NULL,
+                    changelog_version TEXT,
+                    category TEXT,
+                    category_confidence REAL,
+                    summary TEXT,
+                    classified_at DATETIME,
+                    is_actioned INTEGER DEFAULT 0
+                )
+                """
+            ))
+            conn.commit()
+
+        # Bulk reference data indexes
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_ic_ticker ON identifier_crosswalk(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_ic_id_value ON identifier_crosswalk(id_value)",
+            "CREATE INDEX IF NOT EXISTS idx_th_ticker ON ticker_history(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_ec_ticker ON event_calendar(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_ec_date ON event_calendar(event_date)",
+            "CREATE INDEX IF NOT EXISTS idx_sl_ticker ON source_lineage(ticker)",
+            "CREATE INDEX IF NOT EXISTS idx_tickers_sic ON tickers(sic_code)",
         ]:
             conn.execute(sa.text(idx_sql))
         conn.commit()

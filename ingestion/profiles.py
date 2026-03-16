@@ -97,6 +97,20 @@ def _fetch_one_profile(ticker: str, engine: sa.Engine, delay: float) -> tuple[st
             }
 
             _upsert_profiles(engine, [row])
+
+            # Also update sector/industry on the tickers table
+            sector = _safe_str(info.get("sector"))
+            industry = _safe_str(info.get("industry"))
+            if sector or industry:
+                with engine.begin() as conn:
+                    conn.execute(
+                        sa.text(
+                            "UPDATE tickers SET sector = COALESCE(:sector, sector), "
+                            "industry = COALESCE(:industry, industry) WHERE ticker = :ticker"
+                        ),
+                        {"ticker": ticker, "sector": sector, "industry": industry},
+                    )
+
             logger.debug(f"{ticker}: company_profiles upserted")
             return ticker, True
 

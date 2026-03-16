@@ -11,29 +11,40 @@
 
   <header>
     <a class="wordmark" href="/">Needlstack<span>.com</span></a>
+    <nav id="top-nav"></nav>
   </header>
 
   <main>
-    <div id="controls"></div>
+    <!-- Data & Trends section (existing, enhanced) -->
+    <div id="section-data" class="app-section">
+      <div id="company-header"></div>
+      <div id="controls"></div>
 
-    <div id="chart-container">
-      <!-- Plotly renders here -->
-      <div id="plotly-chart"></div>
-
-      <!-- Empty / loading state overlay -->
-      <div id="chart-placeholder">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="1.5"
-             stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
-        <p>Search for a ticker to get started</p>
-        <div class="spinner" style="display:none"></div>
+      <div id="chart-container">
+        <div id="plotly-chart"></div>
+        <div id="chart-placeholder">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.5"
+               stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          <p>Search for a ticker to get started</p>
+          <div class="spinner" style="display:none"></div>
+        </div>
       </div>
+
+      <div id="tab-bar"></div>
+      <div id="tab-content"></div>
     </div>
 
-    <div id="tab-bar"></div>
-    <div id="tab-content"></div>
+    <!-- Portfolio Builder section -->
+    <div id="section-portfolio" class="app-section" style="display:none"></div>
+
+    <!-- Watchlist Builder section -->
+    <div id="section-watchlist" class="app-section" style="display:none"></div>
+
+    <!-- Data Health section -->
+    <div id="section-health" class="app-section" style="display:none"></div>
 
     <div id="status-bar"></div>
   </main>

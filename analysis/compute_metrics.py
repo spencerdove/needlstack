@@ -106,7 +106,14 @@ def _cagr(current, base, years: int) -> Optional[float]:
     if current is None or base is None or base <= 0 or years <= 0:
         return None
     try:
-        return (float(current) / float(base)) ** (1.0 / years) - 1.0
+        ratio = float(current) / float(base)
+        if ratio < 0:
+            return None  # negative ratio produces complex result
+        result = ratio ** (1.0 / years) - 1.0
+        import math
+        if math.isnan(result) or math.isinf(result):
+            return None
+        return result
     except (TypeError, ValueError, ZeroDivisionError):
         return None
 
@@ -565,10 +572,28 @@ def _compute_ticker_metrics(ticker: str, engine: sa.Engine) -> dict:
     return metrics
 
 
+def _sanitize_metrics(rows: list[dict]) -> list[dict]:
+    """Replace nan, inf, and complex values with None for SQLite compatibility."""
+    import math
+    clean = []
+    for row in rows:
+        cleaned = {}
+        for k, v in row.items():
+            if isinstance(v, complex):
+                cleaned[k] = None
+            elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                cleaned[k] = None
+            else:
+                cleaned[k] = v
+        clean.append(cleaned)
+    return clean
+
+
 def _upsert_derived_metrics(engine: sa.Engine, rows: list[dict]) -> int:
     """Upsert rows into derived_metrics table."""
     if not rows:
         return 0
+    rows = _sanitize_metrics(rows)
     with engine.begin() as conn:
         conn.execute(
             sa.text(

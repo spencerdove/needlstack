@@ -4,7 +4,7 @@
 
 Needlstack is a financial analysis platform at needlstack.com. It ingests market data, earnings filings, news, and social sentiment and surfaces insights via an interactive SPA on GitHub Pages.
 
-## Current State (Phases 1–8 complete as of 2026-03-14)
+## Current State (Phases 1–9 complete as of 2026-03-15)
 
 ### Data Pipeline
 - **Prices**: yfinance daily OHLCV → `stock_prices` table + `docs/data/prices/{T}.json`
@@ -18,9 +18,15 @@ Needlstack is a financial analysis platform at needlstack.com. It ingests market
 - **Sentiment**: VADER → `ticker_sentiment_daily`
 - **Narratives**: keyword-phrase detection → `narratives`, `narrative_signals`
 - **AI Agent**: Claude claude-sonnet-4-6 via Anthropic SDK → `agent/runner.py`, `agent/api.py` (FastAPI)
+- **Bulk Reference Data**: SEC EDGAR submissions (SIC, fiscal year, entity type), OpenFIGI (FIGI, security type), Alpha Vantage (IPO dates), FMP (float, calendars) → `sic_lookup`, `identifier_crosswalk`, `ticker_history`, `event_calendar`, `source_lineage`
+- **Email Notifications**: Resend API for changelog emails → `ingestion/email.py`, `scripts/send_changelog.py`
+- **Feedback**: email reply ingestion + Claude classification → `feedback` table, `ingestion/feedback.py`, `ingestion/feedback_classifier.py`
 
-### DB Schema (21+ tables)
-Key tables: `tickers`, `stock_prices`, `income_statements`, `balance_sheets`, `cash_flows`, `security_metadata`, `valuation_snapshots`, `derived_metrics`, `institutional_holdings`, `institutional_summary`, `sec_filings`, `news_sources`, `news_articles`, `article_tickers`, `article_sentiment`, `ticker_sentiment_daily`, `content_items`, `content_tickers`, `content_sentiment`, `narratives`, `narrative_signals`
+### DB Schema (38 tables)
+Key tables: `tickers`, `stock_prices`, `income_statements`, `balance_sheets`, `cash_flows`, `security_metadata`, `valuation_snapshots`, `derived_metrics`, `institutional_holdings`, `institutional_summary`, `sec_filings`, `news_sources`, `news_articles`, `article_tickers`, `article_sentiment`, `ticker_sentiment_daily`, `content_items`, `content_tickers`, `content_sentiment`, `narratives`, `narrative_signals`, `sic_lookup`, `identifier_crosswalk`, `ticker_history`, `event_calendar`, `source_lineage`, `feedback`
+- `tickers` table new columns: `sic_code`, `sic_description`, `security_type`, `currency`, `country`, `ipo_date`, `delist_date`, `fiscal_year_end`, `state_of_incorporation`, `entity_type`, `sub_industry`
+- `security_metadata` new columns: `short_interest`, `short_ratio`, `insider_pct`, `institutional_pct`
+- `company_profiles` new columns: `ceo`, `phone`, `reporting_currency`, `accounting_standard`
 
 ### Derived Metrics Computed (analysis/compute_metrics.py)
 - **Growth**: revenue_yoy, net_income_yoy, eps_yoy, operating_income_yoy, ocf_yoy, fcf_yoy, ebitda_yoy, revenue_qoq, revenue_3yr_cagr, revenue_5yr_cagr, eps_3yr_cagr, eps_5yr_cagr
@@ -49,7 +55,7 @@ Key tables: `tickers`, `stock_prices`, `income_statements`, `balance_sheets`, `c
 - Every 15min: `article_fetch.py`
 - Daily `0 1 * * *`: `daily_sentiment_agg.py`
 - Daily `0 2 * * *`: `daily_narrative.py`
-- Weekly: `weekly_metadata.py`, `weekly_profiles.py`
+- Weekly: `weekly_metadata.py`, `weekly_profiles.py`, `weekly_fmp_bulk.py` (Mon 7am), `weekly_event_calendar.py` (Mon 8am)
 - Quarterly: `quarterly_13f.py`
 
 ### Export

@@ -1,6 +1,6 @@
 # Needlstack — Database Schema
 
-SQLite at `db/needlstack.db`. 25 tables across 6 logical groups. All foreign keys reference `tickers.ticker`. Primary keys are marked **PK**. All financial values are stored in their native units (dollars, shares, ratios) unless noted.
+SQLite at `db/needlstack.db`. 26 tables across 7 logical groups. All foreign keys reference `tickers.ticker`. Primary keys are marked **PK**. All financial values are stored in their native units (dollars, shares, ratios) unless noted.
 
 ---
 
@@ -627,6 +627,29 @@ Aggregate score per ticker-period.
 | n_metrics_passed | INTEGER | |
 | n_identities_evaluated | INTEGER | |
 | n_identities_passed | INTEGER | |
+
+---
+
+## Group 12 — Feedback
+
+### `feedback`
+User feedback collected from changelog email replies or manual entry. Classified by Claude.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| **id** | INTEGER PK | Auto-increment |
+| source | TEXT | `email` or `manual` |
+| sender_email | TEXT | |
+| sender_name | TEXT | |
+| subject | TEXT | |
+| body | TEXT | Full feedback text |
+| received_at | DATETIME | |
+| changelog_version | TEXT | e.g. `v4.0` — parsed from subject line |
+| category | TEXT | `bug`, `feature_request`, `question`, `general` — set by classifier |
+| category_confidence | FLOAT | 0.0–1.0 from Claude |
+| summary | TEXT | One-sentence summary from Claude |
+| classified_at | DATETIME | When classification ran |
+| is_actioned | INTEGER | 0 = open, 1 = addressed |
 
 ---
 
