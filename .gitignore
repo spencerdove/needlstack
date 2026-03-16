@@ -38,19 +38,6 @@ env/
 # macOS
 .DS_Store
 
-# Docs data — per-ticker files served from Cloudflare R2, not committed
-docs/data/prices/
-docs/data/financials/
-docs/data/metadata/
-docs/data/corporate_actions/
-docs/data/profiles/
-docs/data/ownership/
-docs/data/sentiment/
-docs/data/news/
-docs/data/social/
-docs/data/metrics/
-docs/data/indexes.json
-docs/data/macro.json
-docs/data/narratives.json
-# Keep tickers.json committed — it's the search index (~1 MB)
-!docs/data/tickers.json
+# Docs data — committed to git, served by GitHub Pages
+# Export log is local-only
+docs/data/export_log.json

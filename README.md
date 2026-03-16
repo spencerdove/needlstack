@@ -659,6 +659,36 @@ uvicorn agent.api:app --host 0.0.0.0 --port 8000
 
 ---
 
+## Architecture Decisions & Roadmap
+
+### Current: Data served from git via GitHub Pages
+
+All exported JSON files (~500 MB across 11K tickers) are committed to `docs/data/` and served directly by GitHub Pages. The frontend fetches from the relative `/data/` path. Data updates require running `LOCAL_EXPORT=1 python scripts/export_data.py` locally, then committing and pushing.
+
+**Why this approach:** Zero infrastructure cost, zero overage risk, no external service dependencies. Tradeoff is a large git repo and manual data refresh workflow.
+
+### Future: Cloudflare R2 CDN
+
+The codebase already has R2 upload support (`storage/r2.py`, `scripts/export_data.py`). The plan is to migrate data serving to Cloudflare R2 with a `data.needlstack.com` custom domain once we can set up:
+
+1. **Hard spending caps** — R2's free tier (10 GB storage, 10M reads/month) is generous, but Cloudflare does not currently offer a hard spending limit. We need either Cloudflare billing alerts configured or a proxy layer that rate-limits reads before switching.
+2. **DNS migration** — Moving nameservers from GoDaddy to Cloudflare to enable the `data.needlstack.com` custom domain. This also brings CDN caching and DDoS protection for the main site. Requires re-adding all DNS records (GitHub Pages CNAME, Resend MX/TXT/DKIM) and verifying no downtime.
+3. **Automated export** — A GitHub Actions workflow or cron job that runs `export_data.py` and uploads to R2 without manual intervention.
+
+Until then, git-committed data is the safe, free, working solution.
+
+### Future: Deploy FastAPI agent API
+
+The AI Chat tab requires `api.needlstack.com` to be running (`agent/api.py`). This is a FastAPI server that queries the local SQLite DB via Claude. Deployment options under consideration:
+
+1. **Render or Railway** (free tier) — simplest, but requires deciding on SQLite vs Postgres for persistence
+2. **Fly.io** — more control, persistent volumes for SQLite
+3. **Self-hosted** — most control, ongoing maintenance
+
+The feedback webhook (`POST /webhook/email`) also lives in this API. Until deployed, feedback is collected manually.
+
+---
+
 ## Changelog
 
 ### v4.0 — 2026-03-15 — Bulk Reference Data & Email Notifications

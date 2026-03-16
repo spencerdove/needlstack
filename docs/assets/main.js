@@ -80,9 +80,7 @@ const BASE_PATH = (() => {
   return path || '';
 })();
 
-const DATA_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  ? `${BASE_PATH}/data`
-  : 'https://data.needlstack.com';
+const DATA_BASE_URL = `${BASE_PATH}/data`;
 
 const LOCAL_DATA_URL = `${BASE_PATH}/data`;
 
