@@ -45,15 +45,24 @@ def _insert_conversation(
     context_tickers: Optional[list[str]],
 ) -> None:
     with engine.begin() as conn:
-        conn.execute(
-            sa.text(
-                """
+        dialect = engine.dialect.name
+        if dialect == "sqlite":
+            sql = """
                 INSERT OR IGNORE INTO agent_conversations
                     (conversation_id, created_at, context_tickers, model_used)
                 VALUES
                     (:conversation_id, :created_at, :context_tickers, :model_used)
-                """
-            ),
+            """
+        else:
+            sql = """
+                INSERT INTO agent_conversations
+                    (conversation_id, created_at, context_tickers, model_used)
+                VALUES
+                    (:conversation_id, :created_at, :context_tickers, :model_used)
+                ON CONFLICT (conversation_id) DO NOTHING
+            """
+        conn.execute(
+            sa.text(sql),
             {
                 "conversation_id": conversation_id,
                 "created_at": datetime.utcnow().isoformat(),
