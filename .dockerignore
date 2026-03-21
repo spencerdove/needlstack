@@ -1,0 +1,16 @@
+docs/data/
+db/needlstack.db
+db/needlstack.db-shm
+db/needlstack.db-wal
+logs/
+.env
+__pycache__/
+*.pyc
+.git/
+.github/
+storage/
+changelogs/
+data/
+analysis/
+scripts/
+*.md

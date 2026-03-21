@@ -7,6 +7,7 @@ Usage:
 """
 import json
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -18,22 +19,36 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from db.schema import get_engine, init_db
 from agent.runner import run_agent
+from agent.usage import router as usage_router
 from ingestion.feedback import store_feedback
 
 logger = logging.getLogger(__name__)
 
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Needlstack Agent API")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+allowed_origins = os.getenv(
+    "ALLOWED_ORIGINS", "https://needlstack.com,http://localhost:3000"
+).split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://needlstack.com", "http://localhost:3000"],
+    allow_origins=[o.strip() for o in allowed_origins],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(usage_router)
 
 
 class ChatRequest(BaseModel):
@@ -43,18 +58,19 @@ class ChatRequest(BaseModel):
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+@limiter.limit("10/minute")
+async def chat(request: Request, chat_request: ChatRequest):
     """Non-streaming chat endpoint. Runs the agent and returns the final response."""
     try:
         engine = get_engine()
         response_text = run_agent(
-            user_message=request.message,
-            context_tickers=request.tickers,
+            user_message=chat_request.message,
+            context_tickers=chat_request.tickers,
             engine=engine,
         )
         return {
             "response": response_text,
-            "tickers": request.tickers,
+            "tickers": chat_request.tickers,
         }
     except EnvironmentError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -64,7 +80,8 @@ async def chat(request: ChatRequest):
 
 
 @app.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
+@limiter.limit("10/minute")
+async def chat_stream(request: Request, chat_request: ChatRequest):
     """
     Streaming chat endpoint using Server-Sent Events.
     Yields SSE events as the agent produces output.
@@ -73,8 +90,8 @@ async def chat_stream(request: ChatRequest):
         try:
             engine = get_engine()
             response_text = run_agent(
-                user_message=request.message,
-                context_tickers=request.tickers,
+                user_message=chat_request.message,
+                context_tickers=chat_request.tickers,
                 engine=engine,
             )
             # Stream the response in chunks

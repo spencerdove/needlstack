@@ -84,6 +84,30 @@ const DATA_BASE_URL = `${BASE_PATH}/data`;
 
 const LOCAL_DATA_URL = `${BASE_PATH}/data`;
 
+const API_BASE_URL = 'https://api.needlstack.com';
+let _apiAvailable = false;  // set by health check on load
+
+function getAuthHeaders() {
+  // Stub — returns auth headers when JWT auth is implemented (Sprint 4).
+  return {};
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...getAuthHeaders(), ...(options.headers || {}) };
+  const res = await fetch(`${API_BASE_URL}${path}`, { ...options, headers });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+async function checkApiHealth() {
+  try {
+    const res = await fetch(`${API_BASE_URL}/health`, { signal: AbortSignal.timeout(5000) });
+    _apiAvailable = res.ok;
+  } catch {
+    _apiAvailable = false;
+  }
+}
+
 // Plotly color constants
 const CHART_PAPER_BG = '#0f131a';
 const CHART_PLOT_BG = '#0a0e14';
@@ -94,7 +118,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   buildTopNav();
   buildControls();
   buildTabBar();
-  await Promise.all([fetchTickers(), fetchGlobalData()]);
+  await Promise.all([fetchTickers(), fetchGlobalData(), checkApiHealth()]);
   renderTabContent();
   renderChart();
 });
@@ -1361,6 +1385,14 @@ function renderNarrativesTab(content) {
 }
 
 function renderChatTab(content) {
+  if (!_apiAvailable) {
+    content.innerHTML = `
+      <div class="tab-section chat-container">
+        <p class="tab-empty">AI Chat is currently unavailable. The API server may be starting up — try refreshing in a moment.</p>
+      </div>`;
+    return;
+  }
+
   content.innerHTML = `
     <div class="tab-section chat-container">
       <div id="chat-messages"></div>
@@ -1368,7 +1400,7 @@ function renderChatTab(content) {
         <input id="chat-input" type="text" placeholder="Ask about ${state.activeTickers.join(', ')}\u2026" />
         <button id="chat-send">Ask</button>
       </div>
-      <p class="chat-hint">Powered by Claude. Requires api.needlstack.com to be deployed.</p>
+      <p class="chat-hint">Powered by Claude</p>
     </div>`;
 
   document.getElementById('chat-send')?.addEventListener('click', sendChatMessage);
@@ -1397,18 +1429,15 @@ async function sendChatMessage() {
   messages.scrollTop = messages.scrollHeight;
 
   try {
-    const res = await fetch('https://api.needlstack.com/chat', {
+    const data = await apiFetch('/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, tickers: state.activeTickers }),
     });
-    if (!res.ok) throw new Error(`API error ${res.status}`);
-    const data = await res.json();
     assistantEl.className = 'chat-message assistant';
     assistantEl.textContent = data.response;
   } catch (err) {
     assistantEl.className = 'chat-message assistant error';
-    assistantEl.textContent = `Error: ${err.message}. Make sure api.needlstack.com is deployed.`;
+    assistantEl.textContent = `Error: ${err.message}`;
   }
   messages.scrollTop = messages.scrollHeight;
 }

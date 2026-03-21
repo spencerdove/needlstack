@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from anthropic import Anthropic
 
 from db.schema import get_engine, feedback_table
+from agent.usage import log_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,17 @@ def classify_feedback(engine: Optional[sa.Engine] = None) -> int:
                     max_tokens=200,
                     messages=[{"role": "user", "content": prompt}],
                 )
+                # Log usage for cost tracking
+                if resp.usage:
+                    log_api_call(
+                        engine=engine,
+                        service="anthropic",
+                        endpoint="/classify_feedback",
+                        tokens_in=resp.usage.input_tokens,
+                        tokens_out=resp.usage.output_tokens,
+                        model="claude-sonnet-4-6",
+                    )
+
                 text = resp.content[0].text.strip()
                 result = json.loads(text)
 

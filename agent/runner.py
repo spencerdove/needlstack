@@ -14,6 +14,7 @@ from anthropic import Anthropic
 
 from db.schema import get_engine
 from agent.tools import TOOL_DEFINITIONS, execute_tool
+from agent.usage import log_api_call, check_budget
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,15 @@ def run_agent(
     if engine is None:
         engine = get_engine()
 
+    # Check budget before running
+    budget = check_budget(engine)
+    if budget["daily_budget_exceeded"]:
+        return (
+            "Daily API usage limit reached "
+            f"(${budget['daily_spend_usd']:.2f} / ${budget['daily_budget_usd']:.2f}). "
+            "Please try again tomorrow or adjust the DAILY_BUDGET_USD setting."
+        )
+
     client = _get_client()
 
     conversation_id = str(uuid.uuid4())
@@ -137,6 +147,17 @@ def run_agent(
         )
 
         tokens_used = response.usage.input_tokens + response.usage.output_tokens if response.usage else None
+
+        # Log API usage for cost tracking
+        if response.usage:
+            log_api_call(
+                engine=engine,
+                service="anthropic",
+                endpoint="/chat",
+                tokens_in=response.usage.input_tokens,
+                tokens_out=response.usage.output_tokens,
+                model=MODEL,
+            )
 
         # Store assistant response content
         _insert_message(

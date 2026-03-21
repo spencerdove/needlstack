@@ -58,9 +58,20 @@ TABLES_TO_MIGRATE = [
     "institutional_holdings",
     "institutional_summary",
     "sec_filings",
+    "derived_metrics",
+    "narratives",
+    "narrative_signals",
+    "ticker_sentiment_daily",
+    "agent_conversations",
+    "agent_messages",
+    "api_usage_log",
 ]
 
 CHUNK_SIZE = 1000
+
+# Only migrate prices from this date onward when --recent-prices-only is used.
+# Keeps Postgres under 1 GB for free-tier hosting.
+PRICES_CUTOFF_DATE = "2024-01-01"
 
 
 def _get_sqlite_engine() -> sa.Engine:
@@ -93,6 +104,7 @@ def migrate_table(
     sqlite_engine: sa.Engine,
     pg_engine: sa.Engine,
     chunksize: int = CHUNK_SIZE,
+    where_clause: str = "",
 ) -> int:
     """
     Read table from SQLite in chunks and append to Postgres.
@@ -106,7 +118,10 @@ def migrate_table(
     offset = 0
 
     while True:
-        query = f"SELECT * FROM {table_name} LIMIT {chunksize} OFFSET {offset}"
+        query = f"SELECT * FROM {table_name}"
+        if where_clause:
+            query += f" WHERE {where_clause}"
+        query += f" LIMIT {chunksize} OFFSET {offset}"
         df = pd.read_sql(query, sqlite_engine)
         if df.empty:
             break
@@ -134,6 +149,16 @@ def migrate_table(
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Migrate SQLite data to Postgres")
+    parser.add_argument(
+        "--recent-prices-only",
+        action="store_true",
+        help=f"Only migrate stock_prices from {PRICES_CUTOFF_DATE} onward (saves ~60%% of space)",
+    )
+    args = parser.parse_args()
+
     logger.info("=== PostgreSQL migration started ===")
 
     database_url = os.getenv("DATABASE_URL")
@@ -147,20 +172,24 @@ def main() -> None:
 
     logger.info(f"Source SQLite: {DB_PATH}")
     logger.info(f"Target Postgres: {database_url[:database_url.rfind('@') + 1]}***")
+    if args.recent_prices_only:
+        logger.info(f"Limiting stock_prices to dates >= {PRICES_CUTOFF_DATE}")
 
     sqlite_engine = _get_sqlite_engine()
     pg_engine = _get_postgres_engine()
 
     # Ensure all tables exist in Postgres
     logger.info("Initializing schema in Postgres...")
-    init_db.__wrapped__ = None  # bypass any caching if present
-    from db.schema import metadata
-    metadata.create_all(pg_engine)
+    from db.schema import metadata as db_metadata
+    db_metadata.create_all(pg_engine)
 
     grand_total = 0
     for table_name in TABLES_TO_MIGRATE:
         logger.info(f"Migrating table: {table_name}")
-        rows = migrate_table(table_name, sqlite_engine, pg_engine)
+        where = ""
+        if table_name == "stock_prices" and args.recent_prices_only:
+            where = f"date >= '{PRICES_CUTOFF_DATE}'"
+        rows = migrate_table(table_name, sqlite_engine, pg_engine, where_clause=where)
         logger.info(f"  {table_name}: {rows} rows migrated")
         grand_total += rows
 

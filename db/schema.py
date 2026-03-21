@@ -716,6 +716,20 @@ source_lineage_table = sa.Table(
     sa.PrimaryKeyConstraint("table_name", "ticker", "field_name"),
 )
 
+api_usage_log_table = sa.Table(
+    "api_usage_log",
+    metadata,
+    sa.Column("id", sa.Text, primary_key=True),
+    sa.Column("service", sa.Text, nullable=False),
+    sa.Column("endpoint", sa.Text),
+    sa.Column("timestamp", sa.DateTime, nullable=False),
+    sa.Column("tokens_in", sa.Integer),
+    sa.Column("tokens_out", sa.Integer),
+    sa.Column("cost_usd", sa.Float),
+    sa.Column("user_id", sa.Text),
+    sa.Column("metadata_json", sa.Text),
+)
+
 
 def _sqlite_column_exists(conn: sa.Connection, table: str, column: str) -> bool:
     rows = conn.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
