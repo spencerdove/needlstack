@@ -4,7 +4,7 @@
 
 Needlstack is a financial analysis platform at needlstack.com. It ingests market data, earnings filings, news, and social sentiment and surfaces insights via an interactive SPA on GitHub Pages.
 
-## Current State (Phases 1–9 complete as of 2026-03-15)
+## Current State (Phases 1–9 complete as of 2026-03-21)
 
 ### Data Pipeline
 - **Prices**: yfinance daily OHLCV → `stock_prices` table + `docs/data/prices/{T}.json`
@@ -21,6 +21,11 @@ Needlstack is a financial analysis platform at needlstack.com. It ingests market
 - **Bulk Reference Data**: SEC EDGAR submissions (SIC, fiscal year, entity type), OpenFIGI (FIGI, security type), Alpha Vantage (IPO dates), FMP (float, calendars) → `sic_lookup`, `identifier_crosswalk`, `ticker_history`, `event_calendar`, `source_lineage`
 - **Email Notifications**: Resend API for changelog emails → `ingestion/email.py`, `scripts/send_changelog.py`
 - **Feedback**: email reply ingestion + Claude classification → `feedback` table, `ingestion/feedback.py`, `ingestion/feedback_classifier.py`
+
+### Data Serving
+- All exported JSON committed to `docs/data/` and served by GitHub Pages (no R2/CDN)
+- Frontend `DATA_BASE_URL` uses relative `/data/` path
+- R2 migration deferred until Cloudflare spending controls are in place
 
 ### DB Schema (38 tables)
 Key tables: `tickers`, `stock_prices`, `income_statements`, `balance_sheets`, `cash_flows`, `security_metadata`, `valuation_snapshots`, `derived_metrics`, `institutional_holdings`, `institutional_summary`, `sec_filings`, `news_sources`, `news_articles`, `article_tickers`, `article_sentiment`, `ticker_sentiment_daily`, `content_items`, `content_tickers`, `content_sentiment`, `narratives`, `narrative_signals`, `sic_lookup`, `identifier_crosswalk`, `ticker_history`, `event_calendar`, `source_lineage`, `feedback`
@@ -60,15 +65,24 @@ Key tables: `tickers`, `stock_prices`, `income_statements`, `balance_sheets`, `c
 
 ### Export
 - `scripts/export_data.py` — exports all 10 file types per ticker + 4 global files
-- `LOCAL_EXPORT=1 python scripts/export_data.py --tickers AAPL` to write to docs/data/
+- `LOCAL_EXPORT=1 python scripts/export_data.py` to write to docs/data/
+- Data committed to git and served by GitHub Pages — no R2 upload currently
+
+### Email Notifications
+- `scripts/send_changelog.py v4.0 [--dry-run]` — send changelog to subscribers
+- `data/subscribers.json` — manual subscriber list (gitignored)
+- Resend API for sending, replies go to Gmail (RESEND_REPLY_TO)
+- `scripts/classify_feedback.py` — classify feedback with Claude
+- `scripts/feedback_report.py` — print feedback summary
 
 ## Tech Stack
 
 - **Python 3.11+**, pandas, SQLAlchemy, SQLite (Postgres optional via DATABASE_URL)
 - **Vanilla JS** (no framework), Plotly.js 2.35.0
 - **GitHub Pages** (main branch → /docs), custom domain needlstack.com via GoDaddy
-- **FastAPI + uvicorn** for agent API at api.needlstack.com (deploy separately)
+- **FastAPI + uvicorn** for agent API at api.needlstack.com (not yet deployed)
 - **Claude claude-sonnet-4-6** via Anthropic SDK for AI agent
+- **Resend** for email notifications (free tier, 100/day)
 
 ## Code Conventions
 
@@ -84,6 +98,8 @@ Key tables: `tickers`, `stock_prices`, `income_statements`, `balance_sheets`, `c
 ## What NOT to do
 
 - Do not hardcode ticker lists — always make configurable
+- **Do not scope scripts to S&P 500** — always use `get_active_tickers(asset_types=["equity"])` for the full universe
 - Do not mix web frontend code with data pipeline code
 - Do not commit `.env`, `data/`, or `db/` to git
 - Do not use `X | None` union syntax (use `Optional[X]`)
+- yfinance ingestion: max 2 threads, 0.5s delay, exponential backoff on rate limits
