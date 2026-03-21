@@ -51,7 +51,8 @@ def _upsert_corporate_actions(engine: sa.Engine, rows: list[dict]) -> int:
 def download_corporate_actions(
     tickers: list[str],
     engine: Optional[sa.Engine] = None,
-    delay: float = 0.3,
+    delay: float = 0.5,
+    max_retries: int = 3,
 ) -> tuple[int, list[str]]:
     """
     Fetch splits and dividends from yfinance for each ticker and upsert
@@ -69,55 +70,72 @@ def download_corporate_actions(
     failed: list[str] = []
 
     for ticker in tickers:
-        try:
-            yf_ticker = yf.Ticker(ticker)
-            rows: list[dict] = []
+        success = False
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    backoff = delay * (2 ** attempt)
+                    logger.debug(f"{ticker}: retry {attempt}, waiting {backoff:.1f}s")
+                    time.sleep(backoff)
+                else:
+                    time.sleep(delay)
 
-            # --- Splits ---
-            splits = yf_ticker.splits
-            if splits is not None and not splits.empty:
-                for idx_date, val in splits.items():
-                    ratio = _safe(val)
-                    if ratio is None:
+                yf_ticker = yf.Ticker(ticker)
+                rows: list[dict] = []
+
+                # --- Splits ---
+                splits = yf_ticker.splits
+                if splits is not None and not splits.empty:
+                    for idx_date, val in splits.items():
+                        ratio = _safe(val)
+                        if ratio is None:
+                            continue
+                        action_date = pd.Timestamp(idx_date).date().isoformat()
+                        rows.append({
+                            "ticker": ticker,
+                            "action_date": action_date,
+                            "action_type": "split",
+                            "ratio": ratio,
+                            "amount": None,
+                            "notes": None,
+                        })
+
+                # --- Dividends ---
+                dividends = yf_ticker.dividends
+                if dividends is not None and not dividends.empty:
+                    for idx_date, val in dividends.items():
+                        amount = _safe(val)
+                        if amount is None:
+                            continue
+                        action_date = pd.Timestamp(idx_date).date().isoformat()
+                        rows.append({
+                            "ticker": ticker,
+                            "action_date": action_date,
+                            "action_type": "dividend",
+                            "ratio": None,
+                            "amount": amount,
+                            "notes": None,
+                        })
+
+                if rows:
+                    inserted = _upsert_corporate_actions(engine, rows)
+                    total_rows += inserted
+                    logger.debug(f"{ticker}: {inserted} corporate action rows upserted")
+                else:
+                    logger.debug(f"{ticker}: no corporate actions found")
+
+                success = True
+                break
+
+            except Exception as exc:
+                exc_str = str(exc)
+                if "Too Many Requests" in exc_str or "Rate" in exc_str:
+                    if attempt < max_retries:
                         continue
-                    action_date = pd.Timestamp(idx_date).date().isoformat()
-                    rows.append({
-                        "ticker": ticker,
-                        "action_date": action_date,
-                        "action_type": "split",
-                        "ratio": ratio,
-                        "amount": None,
-                        "notes": None,
-                    })
+                logger.error(f"Failed to process corporate actions for {ticker}: {exc}")
+                break
 
-            # --- Dividends ---
-            dividends = yf_ticker.dividends
-            if dividends is not None and not dividends.empty:
-                for idx_date, val in dividends.items():
-                    amount = _safe(val)
-                    if amount is None:
-                        continue
-                    action_date = pd.Timestamp(idx_date).date().isoformat()
-                    rows.append({
-                        "ticker": ticker,
-                        "action_date": action_date,
-                        "action_type": "dividend",
-                        "ratio": None,
-                        "amount": amount,
-                        "notes": None,
-                    })
-
-            if rows:
-                inserted = _upsert_corporate_actions(engine, rows)
-                total_rows += inserted
-                logger.debug(f"{ticker}: {inserted} corporate action rows upserted")
-            else:
-                logger.debug(f"{ticker}: no corporate actions found")
-
-        except Exception as exc:
-            logger.error(f"Failed to process corporate actions for {ticker}: {exc}")
+        if not success:
             failed.append(ticker)
-        finally:
-            time.sleep(delay)
 
     return total_rows, failed

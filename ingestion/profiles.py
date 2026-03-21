@@ -25,7 +25,7 @@ from db.schema import get_engine
 
 logger = logging.getLogger(__name__)
 
-_SEMAPHORE = threading.BoundedSemaphore(8)
+_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
 def _safe_str(val) -> Optional[str]:
@@ -74,55 +74,69 @@ def _upsert_profiles(engine: sa.Engine, rows: list[dict]) -> int:
     return len(rows)
 
 
-def _fetch_one_profile(ticker: str, engine: sa.Engine, delay: float) -> tuple[str, bool]:
+def _fetch_one_profile(ticker: str, engine: sa.Engine, delay: float, max_retries: int) -> tuple[str, bool]:
     with _SEMAPHORE:
-        time.sleep(delay)
-        try:
-            yf_ticker = yf.Ticker(ticker)
-            info = yf_ticker.info
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    backoff = delay * (2 ** attempt)
+                    logger.debug(f"{ticker}: retry {attempt}, waiting {backoff:.1f}s")
+                    time.sleep(backoff)
+                else:
+                    time.sleep(delay)
 
-            if not info:
-                logger.debug(f"{ticker}: no info data returned")
+                yf_ticker = yf.Ticker(ticker)
+                info = yf_ticker.info
+
+                if not info:
+                    logger.debug(f"{ticker}: no info data returned")
+                    return ticker, True
+
+                row = {
+                    "ticker": ticker,
+                    "description": _safe_str(info.get("longBusinessSummary")),
+                    "employees": _safe_int(info.get("fullTimeEmployees")),
+                    "website": _safe_str(info.get("website")),
+                    "country": _safe_str(info.get("country")),
+                    "city": _safe_str(info.get("city")),
+                    "state": _safe_str(info.get("state")),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+
+                _upsert_profiles(engine, [row])
+
+                # Also update sector/industry on the tickers table
+                sector = _safe_str(info.get("sector"))
+                industry = _safe_str(info.get("industry"))
+                if sector or industry:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            sa.text(
+                                "UPDATE tickers SET sector = COALESCE(:sector, sector), "
+                                "industry = COALESCE(:industry, industry) WHERE ticker = :ticker"
+                            ),
+                            {"ticker": ticker, "sector": sector, "industry": industry},
+                        )
+
+                logger.debug(f"{ticker}: company_profiles upserted")
                 return ticker, True
 
-            row = {
-                "ticker": ticker,
-                "description": _safe_str(info.get("longBusinessSummary")),
-                "employees": _safe_int(info.get("fullTimeEmployees")),
-                "website": _safe_str(info.get("website")),
-                "country": _safe_str(info.get("country")),
-                "city": _safe_str(info.get("city")),
-                "state": _safe_str(info.get("state")),
-                "updated_at": datetime.utcnow().isoformat(),
-            }
+            except Exception as exc:
+                exc_str = str(exc)
+                if "Too Many Requests" in exc_str or "Rate" in exc_str:
+                    if attempt < max_retries:
+                        continue
+                logger.error(f"Failed to process company profile for {ticker}: {exc}")
+                return ticker, False
 
-            _upsert_profiles(engine, [row])
-
-            # Also update sector/industry on the tickers table
-            sector = _safe_str(info.get("sector"))
-            industry = _safe_str(info.get("industry"))
-            if sector or industry:
-                with engine.begin() as conn:
-                    conn.execute(
-                        sa.text(
-                            "UPDATE tickers SET sector = COALESCE(:sector, sector), "
-                            "industry = COALESCE(:industry, industry) WHERE ticker = :ticker"
-                        ),
-                        {"ticker": ticker, "sector": sector, "industry": industry},
-                    )
-
-            logger.debug(f"{ticker}: company_profiles upserted")
-            return ticker, True
-
-        except Exception as exc:
-            logger.error(f"Failed to process company profile for {ticker}: {exc}")
-            return ticker, False
+    return ticker, False
 
 
 def download_company_profiles(
     tickers: list[str],
     engine: Optional[sa.Engine] = None,
-    delay: float = 0.1,
+    delay: float = 0.5,
+    max_retries: int = 3,
 ) -> tuple[int, list[str]]:
     """
     Fetch company profile information from yfinance Ticker.info for each
@@ -134,8 +148,8 @@ def download_company_profiles(
         engine = get_engine()
 
     failed: list[str] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_fetch_one_profile, t, engine, delay): t for t in tickers}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {pool.submit(_fetch_one_profile, t, engine, delay, max_retries): t for t in tickers}
         for fut in concurrent.futures.as_completed(futures):
             _, ok = fut.result()
             if not ok:

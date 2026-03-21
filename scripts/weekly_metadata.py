@@ -1,6 +1,6 @@
 """
 Weekly metadata refresh script — refreshes security_metadata and
-corporate_actions for all active S&P 500 tickers.
+corporate_actions for all active equity tickers.
 
 Cron: 0 7 * * 1  (every Monday at 7 AM)
 
@@ -33,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from db.schema import init_db
-from ingestion.tickers import get_sp500_tickers
+from ingestion.universe import get_active_tickers
 from ingestion.metadata import download_security_metadata
 from ingestion.corporate_actions import download_corporate_actions
 
@@ -43,8 +43,8 @@ def main() -> None:
 
     engine = init_db()
 
-    tickers = get_sp500_tickers()
-    logger.info(f"Processing {len(tickers)} S&P 500 tickers")
+    tickers = get_active_tickers(asset_types=["equity"], engine=engine)
+    logger.info(f"Processing {len(tickers)} active equity tickers")
 
     # Security metadata (shares outstanding, float, market cap, EV, avg volumes)
     meta_rows, meta_failed = download_security_metadata(tickers, engine)

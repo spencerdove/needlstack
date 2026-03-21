@@ -18,7 +18,7 @@ from db.schema import get_engine
 
 logger = logging.getLogger(__name__)
 
-_SEMAPHORE = threading.BoundedSemaphore(8)
+_SEMAPHORE = threading.BoundedSemaphore(2)
 
 
 def _safe(val) -> Optional[float]:
@@ -77,43 +77,57 @@ def _compute_volume_averages(engine: sa.Engine, ticker: str) -> tuple[Optional[f
     return avg_vol, avg_dollar_vol
 
 
-def _fetch_one_metadata(ticker: str, engine: sa.Engine, delay: float) -> tuple[str, bool]:
+def _fetch_one_metadata(ticker: str, engine: sa.Engine, delay: float, max_retries: int) -> tuple[str, bool]:
     with _SEMAPHORE:
-        time.sleep(delay)
-        try:
-            yf_ticker = yf.Ticker(ticker)
-            info = yf_ticker.info
+        for attempt in range(max_retries + 1):
+            try:
+                if attempt > 0:
+                    backoff = delay * (2 ** attempt)
+                    logger.debug(f"{ticker}: retry {attempt}, waiting {backoff:.1f}s")
+                    time.sleep(backoff)
+                else:
+                    time.sleep(delay)
 
-            if not info:
-                logger.debug(f"{ticker}: no info data returned")
+                yf_ticker = yf.Ticker(ticker)
+                info = yf_ticker.info
+
+                if not info:
+                    logger.debug(f"{ticker}: no info data returned")
+                    return ticker, True
+
+                avg_vol, avg_dollar_vol = _compute_volume_averages(engine, ticker)
+
+                row = {
+                    "ticker": ticker,
+                    "shares_outstanding": _safe(info.get("sharesOutstanding")),
+                    "float_shares": _safe(info.get("floatShares")),
+                    "market_cap": _safe(info.get("marketCap")),
+                    "enterprise_value": _safe(info.get("enterpriseValue")),
+                    "avg_volume_30d": avg_vol,
+                    "avg_dollar_vol_30d": avg_dollar_vol,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+
+                _upsert_metadata(engine, [row])
+                logger.debug(f"{ticker}: security_metadata upserted")
                 return ticker, True
 
-            avg_vol, avg_dollar_vol = _compute_volume_averages(engine, ticker)
+            except Exception as exc:
+                exc_str = str(exc)
+                if "Too Many Requests" in exc_str or "Rate" in exc_str:
+                    if attempt < max_retries:
+                        continue
+                logger.error(f"Failed to process security metadata for {ticker}: {exc}")
+                return ticker, False
 
-            row = {
-                "ticker": ticker,
-                "shares_outstanding": _safe(info.get("sharesOutstanding")),
-                "float_shares": _safe(info.get("floatShares")),
-                "market_cap": _safe(info.get("marketCap")),
-                "enterprise_value": _safe(info.get("enterpriseValue")),
-                "avg_volume_30d": avg_vol,
-                "avg_dollar_vol_30d": avg_dollar_vol,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-
-            _upsert_metadata(engine, [row])
-            logger.debug(f"{ticker}: security_metadata upserted")
-            return ticker, True
-
-        except Exception as exc:
-            logger.error(f"Failed to process security metadata for {ticker}: {exc}")
-            return ticker, False
+    return ticker, False
 
 
 def download_security_metadata(
     tickers: list[str],
     engine: Optional[sa.Engine] = None,
-    delay: float = 0.1,
+    delay: float = 0.5,
+    max_retries: int = 3,
 ) -> tuple[int, list[str]]:
     """
     Fetch security metadata from yfinance Ticker.info for each ticker and
@@ -126,8 +140,8 @@ def download_security_metadata(
         engine = get_engine()
 
     failed: list[str] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {pool.submit(_fetch_one_metadata, t, engine, delay): t for t in tickers}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {pool.submit(_fetch_one_metadata, t, engine, delay, max_retries): t for t in tickers}
         for fut in concurrent.futures.as_completed(futures):
             _, ok = fut.result()
             if not ok:
