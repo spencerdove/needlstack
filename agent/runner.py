@@ -197,7 +197,7 @@ def run_agent(
                         {
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": json.dumps(result),
+                            "content": json.dumps(result, default=str),
                         }
                     )
 
